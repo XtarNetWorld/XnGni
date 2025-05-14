@@ -3,7 +3,7 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>P2P Voice Call (WebRTC)</title>
+    <title>P2P Voice Call (WebRTC + Firebase)</title>
     <style>
         body {
             font-family: Arial, sans-serif;
@@ -24,7 +24,7 @@
         button:disabled {
             background: #cccccc;
         }
-        #localId, #remoteId {
+        #callId {
             width: 100%;
             padding: 10px;
             margin: 10px 0;
@@ -32,26 +32,22 @@
         #status {
             font-weight: bold;
             margin: 20px 0;
+            min-height: 24px;
         }
         #audioContainer {
             margin-top: 20px;
         }
     </style>
+    <!-- Firebase SDK -->
+    <script src="https://www.gstatic.com/firebasejs/9.6.0/firebase-app-compat.js"></script>
+    <script src="https://www.gstatic.com/firebasejs/9.6.0/firebase-firestore-compat.js"></script>
 </head>
 <body>
-    <h1>P2P Voice Call (WebRTC)</h1>
-    <p>Test direct device-to-device voice chat without a server!</p>
+    <h1>P2P Voice Call</h1>
+    <p>Share the Call ID with the other device!</p>
 
     <div>
-        <h3>Your ID:</h3>
-        <input type="text" id="localId" readonly>
-        <button id="copyId">Copy ID</button>
-        <button id="generateId">Generate New ID</button>
-    </div>
-
-    <div>
-        <h3>Enter Remote ID:</h3>
-        <input type="text" id="remoteId" placeholder="Paste other device's ID">
+        <input type="text" id="callId" placeholder="Enter Call ID">
         <button id="startCall">Start Call</button>
         <button id="endCall" disabled>End Call</button>
     </div>
@@ -60,44 +56,41 @@
     <div id="audioContainer"></div>
 
     <script>
-        // Generate a random ID for this device
-        let localId = Math.random().toString(36).substring(2, 10);
-        document.getElementById('localId').value = localId;
-
-        // WebRTC variables
-        let peerConnection;
-        let localStream;
-        const configuration = {
-            iceServers: [{ urls: "stun:stun.l.google.com:19302" }] // Free Google STUN server
+        // Firebase Config (Replace with yours!)
+        const firebaseConfig = {
+              apiKey: "AIzaSyAyeNF9eqEc2lpohD54NFLbjkdn0L5cPIs",
+  authDomain: "webrtc-d0c3e.firebaseapp.com",
+  databaseURL: "https://webrtc-d0c3e-default-rtdb.firebaseio.com",
+  projectId: "webrtc-d0c3e",
+  storageBucket: "webrtc-d0c3e.firebasestorage.app",
+  messagingSenderId: "347788572119",
+  appId: "1:347788572119:web:7534af31dd6ebe64430792",
+  
         };
 
-        // DOM elements
-        const generateIdBtn = document.getElementById('generateId');
-        const copyIdBtn = document.getElementById('copyId');
+        // Initialize Firebase
+        firebase.initializeApp(firebaseConfig);
+        const db = firebase.firestore();
+
+        // WebRTC Variables
+        let peerConnection;
+        let localStream;
+        let callDoc;
+        let offerCandidates;
+        let answerCandidates;
+
+        // DOM Elements
+        const callIdInput = document.getElementById('callId');
         const startCallBtn = document.getElementById('startCall');
         const endCallBtn = document.getElementById('endCall');
-        const remoteIdInput = document.getElementById('remoteId');
         const statusDiv = document.getElementById('status');
         const audioContainer = document.getElementById('audioContainer');
 
-        // Generate a new random ID
-        generateIdBtn.addEventListener('click', () => {
-            localId = Math.random().toString(36).substring(2, 10);
-            document.getElementById('localId').value = localId;
-        });
-
-        // Copy ID to clipboard
-        copyIdBtn.addEventListener('click', () => {
-            navigator.clipboard.writeText(localId);
-            statusDiv.textContent = "Status: ID Copied!";
-            setTimeout(() => statusDiv.textContent = "Status: Ready", 2000);
-        });
-
-        // Start the call
+        // Start Call
         startCallBtn.addEventListener('click', async () => {
-            const remoteId = remoteIdInput.value.trim();
-            if (!remoteId) {
-                statusDiv.textContent = "Status: Enter Remote ID!";
+            const callId = callIdInput.value.trim();
+            if (!callId) {
+                statusDiv.textContent = "Status: Enter a Call ID!";
                 return;
             }
 
@@ -109,9 +102,11 @@
                 // Get microphone access
                 localStream = await navigator.mediaDevices.getUserMedia({ audio: true });
                 
-                // Create peer connection
-                peerConnection = new RTCPeerConnection(configuration);
-                
+                // Create PeerConnection
+                peerConnection = new RTCPeerConnection({
+                    iceServers: [{ urls: "stun:stun.l.google.com:19302" }] // Free STUN server
+                });
+
                 // Add local stream to connection
                 localStream.getTracks().forEach(track => {
                     peerConnection.addTrack(track, localStream);
@@ -127,30 +122,48 @@
                     statusDiv.textContent = "Status: Call Connected!";
                 };
 
-                // ICE candidate exchange (simulated via page since we have no signaling server)
+                // Firebase signaling
+                callDoc = db.collection('calls').doc(callId);
+                offerCandidates = callDoc.collection('offerCandidates');
+                answerCandidates = callDoc.collection('answerCandidates');
+
+                // ICE Candidate Handling
                 peerConnection.onicecandidate = (event) => {
                     if (event.candidate) {
-                        // In a real app, send this to the other peer via a signaling server
-                        // Here, we simulate it by manually copying (for demo purposes)
-                        console.log("ICE Candidate:", JSON.stringify(event.candidate));
+                        offerCandidates.add(event.candidate.toJSON());
                     }
                 };
 
-                // Create offer
+                // Create Offer
                 const offer = await peerConnection.createOffer();
                 await peerConnection.setLocalDescription(offer);
 
-                // Simulate signaling (manually copy/paste in real-world test)
-                const offerString = JSON.stringify(offer);
-                console.log("Offer:", offerString);
-                alert(`Copy this Offer SDP to the other device:\n\n${offerString}`);
+                // Save Offer to Firebase
+                await callDoc.set({
+                    offer: {
+                        type: offer.type,
+                        sdp: offer.sdp
+                    }
+                });
 
-                // Simulate receiving an answer (prompt user to paste)
-                const answerString = prompt("Paste the Answer SDP from the other device:");
-                if (answerString) {
-                    await peerConnection.setRemoteDescription(JSON.parse(answerString));
-                    statusDiv.textContent = "Status: Call Connected!";
-                }
+                // Listen for Answer
+                callDoc.onSnapshot((snapshot) => {
+                    const data = snapshot.data();
+                    if (!peerConnection.currentRemoteDescription && data?.answer) {
+                        const answer = new RTCSessionDescription(data.answer);
+                        peerConnection.setRemoteDescription(answer);
+                    }
+                });
+
+                // Listen for Remote ICE Candidates
+                answerCandidates.onSnapshot((snapshot) => {
+                    snapshot.docChanges().forEach((change) => {
+                        if (change.type === 'added') {
+                            const candidate = new RTCIceCandidate(change.doc.data());
+                            peerConnection.addIceCandidate(candidate);
+                        }
+                    });
+                });
 
             } catch (error) {
                 console.error("Call failed:", error);
@@ -160,16 +173,11 @@
             }
         });
 
-        // End the call
+        // End Call
         endCallBtn.addEventListener('click', () => {
-            if (peerConnection) {
-                peerConnection.close();
-                peerConnection = null;
-            }
-            if (localStream) {
-                localStream.getTracks().forEach(track => track.stop());
-                localStream = null;
-            }
+            if (peerConnection) peerConnection.close();
+            if (localStream) localStream.getTracks().forEach(track => track.stop());
+            if (callDoc) callDoc.delete(); // Cleanup Firebase
             audioContainer.innerHTML = '';
             statusDiv.textContent = "Status: Call Ended";
             startCallBtn.disabled = false;
