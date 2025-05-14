@@ -3,7 +3,8 @@
 <head>
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
-  <title>P2P Voice Call App</title>
+  <title>P2P Video Call App</title>
+  <script src="https://unpkg.com/idb@7.0.2/build/umd.js"></script>
   <style>
     body {
       font-family: Arial, sans-serif;
@@ -24,7 +25,7 @@
       border-radius: 8px;
       box-shadow: 0 0 10px rgba(0,0,0,0.1);
       width: 100%;
-      max-width: 600px;
+      max-width: 800px;
       text-align: center;
     }
     button {
@@ -60,8 +61,37 @@
       color: #333;
       font-size: 16px;
     }
-    #remote-audio {
-      display: none;
+    #video-container {
+      display: flex;
+      justify-content: center;
+      gap: 20px;
+      margin: 20px 0;
+    }
+    .video-box {
+      position: relative;
+      width: 300px;
+      height: 225px;
+      background-color: #000;
+      border-radius: 8px;
+      overflow: hidden;
+    }
+    .video-label {
+      position: absolute;
+      bottom: 10px;
+      left: 10px;
+      color: white;
+      background-color: rgba(0,0,0,0.5);
+      padding: 2px 8px;
+      border-radius: 4px;
+      font-size: 14px;
+    }
+    video {
+      width: 100%;
+      height: 100%;
+      object-fit: cover;
+    }
+    #controls {
+      margin: 10px 0;
     }
     #comment-section {
       margin-top: 20px;
@@ -78,11 +108,18 @@
       width: 80px;
       margin-left: 10px;
     }
+    #file-input {
+      margin: 10px 0;
+      font-size: 14px;
+    }
+    #send-file {
+      width: 80px;
+    }
     #comments {
       border: 1px solid #ccc;
       border-radius: 4px;
       padding: 10px;
-      max-height: 150px;
+      max-height: 400px;
       overflow-y: auto;
       margin-top: 10px;
       background-color: #f9f9f9;
@@ -99,22 +136,76 @@
       color: #333;
       text-align: left;
     }
+    .file-message {
+      margin: 10px 0;
+    }
+    .file-message img, .file-message video {
+      max-width: 150px;
+      max-height: 150px;
+      border-radius: 4px;
+      cursor: pointer;
+    }
+    .file-message a {
+      font-size: 12px;
+      color: #4CAF50;
+      text-decoration: none;
+    }
+    .file-message.local {
+      text-align: right;
+    }
+    .file-message.remote {
+      text-align: left;
+    }
+    .toggle-btn {
+      background-color: #2196F3;
+    }
+    .toggle-btn:hover {
+      background-color: #0b7dda;
+    }
+    .toggle-btn.off {
+      background-color: #f44336;
+    }
+    .toggle-btn.off:hover {
+      background-color: #da190b;
+    }
   </style>
 </head>
 <body>
-  <h1>P2P Voice Call App</h1>
+  <h1>P2P Video Call App</h1>
   <div id="container">
     <div id="status">Status: Idle</div>
-    <button id="start-call">Start Call (Create Offer)</button>
-    <button id="copy-offer" disabled>Copy Offer</button>
+    
+    <div id="video-container">
+      <div class="video-box">
+        <video id="local-video" autoplay muted></video>
+        <div class="video-label">You</div>
+      </div>
+      <div class="video-box">
+        <video id="remote-video" autoplay></video>
+        <div class="video-label">Remote</div>
+      </div>
+    </div>
+    
+    <div id="controls">
+      <button id="start-call">Start Call (Create Offer)</button>
+      <button id="toggle-video" class="toggle-btn">Video On</button>
+      <button id="toggle-audio" class="toggle-btn">Audio On</button>
+      <button id="copy-offer" disabled>Copy Offer</button>
+    </div>
+    
     <textarea id="offer-text" placeholder="Your offer will appear here..." readonly></textarea>
     <textarea id="answer-text" placeholder="Paste remote offer/answer here..."></textarea>
-    <button id="set-remote" disabled>Set Remote SDP</button>
-    <button id="end-call" disabled>End Call</button>
-    <audio id="remote-audio" autoplay></audio>
+    
+    <div id="controls">
+      <button id="set-remote" disabled>Set Remote SDP</button>
+      <button id="end-call" disabled>End Call</button>
+    </div>
+    
     <div id="comment-section">
       <input id="comment-input" type="text" placeholder="Type a comment..." disabled>
       <button id="send-comment" disabled>Send</button>
+      <input id="file-input" type="file" disabled>
+      <button id="send-file" disabled>Send File</button>
       <div id="comments"></div>
     </div>
   </div>
@@ -142,17 +233,44 @@
     const copyOfferBtn = document.getElementById('copy-offer');
     const setRemoteBtn = document.getElementById('set-remote');
     const endCallBtn = document.getElementById('end-call');
+    const toggleVideoBtn = document.getElementById('toggle-video');
+    const toggleAudioBtn = document.getElementById('toggle-audio');
     const offerText = document.getElementById('offer-text');
     const answerText = document.getElementById('answer-text');
     const status = document.getElementById('status');
-    const remoteAudio = document.getElementById('remote-audio');
+    const localVideo = document.getElementById('local-video');
+    const remoteVideo = document.getElementById('remote-video');
     const commentInput = document.getElementById('comment-input');
     const sendCommentBtn = document.getElementById('send-comment');
+    const fileInput = document.getElementById('file-input');
+    const sendFileBtn = document.getElementById('send-file');
     const commentsDiv = document.getElementById('comments');
 
     let peerConnection = null;
     let localStream = null;
     let dataChannel = null;
+    let isVideoOn = true;
+    let isAudioOn = true;
+
+    // IndexedDB setup
+    const dbPromise = idb.openDB('fileStorage', 1, {
+      upgrade(db) {
+        db.createObjectStore('files', { keyPath: 'id', autoIncrement: true });
+      }
+    });
+
+    // Save file to IndexedDB
+    async function saveFileToDB(fileData) {
+      const db = await dbPromise;
+      await db.add('files', fileData);
+    }
+
+    // Load files from IndexedDB and display
+    async function loadFilesFromDB() {
+      const db = await dbPromise;
+      const files = await db.getAll('files');
+      files.forEach(file => addFileComment(file, file.isLocal));
+    }
 
     // Update status message
     function updateStatus(message) {
@@ -160,12 +278,40 @@
       console.log(`Status: ${message}`);
     }
 
-    // Add comment to the UI
-    function addComment(text, isLocal) {
+    // Add text comment to the UI
+    function addTextComment(text, isLocal) {
       const comment = document.createElement('div');
       comment.className = `comment ${isLocal ? 'local' : 'remote'}`;
       comment.textContent = text;
       commentsDiv.appendChild(comment);
+      commentsDiv.scrollTop = commentsDiv.scrollHeight;
+    }
+
+    // Add file to the UI
+    function addFileComment(fileData, isLocal) {
+      const div = document.createElement('div');
+      div.className = `file-message ${isLocal ? 'local' : 'remote'}`;
+      let element;
+      if (fileData.mimeType.startsWith('image/')) {
+        element = document.createElement('img');
+        element.src = fileData.base64;
+        element.onclick = () => window.open(fileData.base64, '_blank');
+      } else if (fileData.mimeType.startsWith('video/')) {
+        element = document.createElement('video');
+        element.src = fileData.base64;
+        element.controls = true;
+      } else {
+        element = document.createElement('span');
+        element.textContent = `File: ${fileData.name}`;
+      }
+      const link = document.createElement('a');
+      link.href = fileData.base64;
+      link.download = fileData.name;
+      link.textContent = 'Download';
+      div.appendChild(element);
+      div.appendChild(document.createElement('br'));
+      div.appendChild(link);
+      commentsDiv.appendChild(div);
       commentsDiv.scrollTop = commentsDiv.scrollHeight;
     }
 
@@ -175,21 +321,34 @@
         peerConnection = new RTCPeerConnection(config);
         updateStatus('Peer connection initialized.');
 
-        // Create data channel for comments
-        dataChannel = peerConnection.createDataChannel('comments');
+        // Create data channel for comments and files
+        dataChannel = peerConnection.createDataChannel('comments', { negotiated: true, id: 0 });
         dataChannel.onopen = () => {
           console.log('Data channel opened');
           commentInput.disabled = false;
           sendCommentBtn.disabled = false;
-          updateStatus('Data channel ready for comments.');
+          fileInput.disabled = false;
+          sendFileBtn.disabled = false;
+          updateStatus('Data channel ready for comments and files.');
         };
-        dataChannel.onmessage = (event) => {
-          addComment(`Remote: ${event.data}`, false);
+        dataChannel.onmessage = async (event) => {
+          const message = JSON.parse(event.data);
+          if (message.type === 'text') {
+            addTextComment(`Remote: ${message.content}`, false);
+          } else if (message.type === 'file') {
+            const fileData = message.content;
+            fileData.isLocal = false;
+            fileData.id = Date.now() + Math.random(); // Unique ID for IndexedDB
+            await saveFileToDB(fileData);
+            addFileComment(fileData, false);
+          }
         };
         dataChannel.onclose = () => {
           console.log('Data channel closed');
           commentInput.disabled = true;
           sendCommentBtn.disabled = true;
+          fileInput.disabled = true;
+          sendFileBtn.disabled = true;
         };
 
         // Handle incoming data channel (for the answerer)
@@ -199,15 +358,28 @@
             console.log('Data channel opened');
             commentInput.disabled = false;
             sendCommentBtn.disabled = false;
-            updateStatus('Data channel ready for comments.');
+            fileInput.disabled = false;
+            sendFileBtn.disabled = false;
+            updateStatus('Data channel ready for comments and files.');
           };
-          dataChannel.onmessage = (event) => {
-            addComment(`Remote: ${event.data}`, false);
+          dataChannel.onmessage = async (event) => {
+            const message = JSON.parse(event.data);
+            if (message.type === 'text') {
+              addTextComment(`Remote: ${message.content}`, false);
+            } else if (message.type === 'file') {
+              const fileData = message.content;
+              fileData.isLocal = false;
+              fileData.id = Date.now() + Math.random(); // Unique ID for IndexedDB
+              await saveFileToDB(fileData);
+              addFileComment(fileData, false);
+            }
           };
           dataChannel.onclose = () => {
             console.log('Data channel closed');
             commentInput.disabled = true;
             sendCommentBtn.disabled = true;
+            fileInput.disabled = true;
+            sendFileBtn.disabled = true;
           };
         };
 
@@ -225,8 +397,8 @@
         peerConnection.oniceconnectionstatechange = () => {
           console.log('ICE Connection State:', peerConnection.iceConnectionState);
           if (peerConnection.iceConnectionState === 'connected') {
-            alert('Devices connected! Voice call is active.');
-            updateStatus('Connected! Voice call active.');
+            alert('Devices connected! Video call is active.');
+            updateStatus('Connected! Video call active.');
           } else if (peerConnection.iceConnectionState === 'failed') {
             updateStatus('Error: ICE connection failed. Try a different network or add a TURN server.');
           }
@@ -239,18 +411,22 @@
 
         // Handle remote stream
         peerConnection.ontrack = (event) => {
-          remoteAudio.srcObject = event.streams[0];
+          remoteVideo.srcObject = event.streams[0];
           endCallBtn.disabled = false;
         };
 
-        // Get local audio stream
+        // Get local audio and video stream
         try {
-          localStream = await navigator.mediaDevices.getUserMedia({ audio: true });
+          localStream = await navigator.mediaDevices.getUserMedia({ 
+            audio: true, 
+            video: true 
+          });
+          localVideo.srcObject = localStream;
           localStream.getTracks().forEach(track => peerConnection.addTrack(track, localStream));
-          updateStatus('Microphone access granted.');
+          updateStatus('Camera and microphone access granted.');
         } catch (err) {
-          console.error('Error accessing microphone:', err);
-          updateStatus('Error: Could not access microphone. Check permissions.');
+          console.error('Error accessing media devices:', err);
+          updateStatus('Error: Could not access camera/microphone. Check permissions.');
           throw err;
         }
       } catch (err) {
@@ -259,6 +435,34 @@
         cleanup();
       }
     }
+
+    // Toggle video stream
+    toggleVideoBtn.onclick = () => {
+      if (!localStream) return;
+      
+      const videoTracks = localStream.getVideoTracks();
+      if (videoTracks.length > 0) {
+        isVideoOn = !isVideoOn;
+        videoTracks[0].enabled = isVideoOn;
+        toggleVideoBtn.textContent = isVideoOn ? 'Video On' : 'Video Off';
+        toggleVideoBtn.className = isVideoOn ? 'toggle-btn' : 'toggle-btn off';
+        updateStatus(`Video ${isVideoOn ? 'enabled' : 'disabled'}`);
+      }
+    };
+
+    // Toggle audio stream
+    toggleAudioBtn.onclick = () => {
+      if (!localStream) return;
+      
+      const audioTracks = localStream.getAudioTracks();
+      if (audioTracks.length > 0) {
+        isAudioOn = !isAudioOn;
+        audioTracks[0].enabled = isAudioOn;
+        toggleAudioBtn.textContent = isAudioOn ? 'Audio On' : 'Audio Off';
+        toggleAudioBtn.className = isAudioOn ? 'toggle-btn' : 'toggle-btn off';
+        updateStatus(`Audio ${isAudioOn ? 'enabled' : 'disabled'}`);
+      }
+    };
 
     // Start call and create offer
     startCallBtn.onclick = async () => {
@@ -283,6 +487,8 @@
 
         startCallBtn.disabled = true;
         setRemoteBtn.disabled = false;
+        toggleVideoBtn.disabled = false;
+        toggleAudioBtn.disabled = false;
       } catch (err) {
         console.error('Error creating offer:', err);
         updateStatus('Error: Failed to create offer.');
@@ -324,12 +530,13 @@
       }
     };
 
-    // Send comment via data channel
+    // Send text comment via data channel
     sendCommentBtn.onclick = () => {
       const comment = commentInput.value.trim();
       if (comment && dataChannel && dataChannel.readyState === 'open') {
-        dataChannel.send(comment);
-        addComment(`You: ${comment}`, true);
+        const message = { type: 'text', content: comment };
+        dataChannel.send(JSON.stringify(message));
+        addTextComment(`You: ${comment}`, true);
         commentInput.value = '';
       } else {
         updateStatus('Error: Cannot send comment. Data channel not open.');
@@ -342,6 +549,54 @@
         e.preventDefault();
         sendCommentBtn.click();
       }
+    };
+
+    // Send file via data channel
+    sendFileBtn.onclick = () => {
+      const file = fileInput.files[0];
+      if (!file) {
+        updateStatus('Error: Please select a file.');
+        return;
+      }
+      if (!dataChannel || dataChannel.readyState !== 'open') {
+        updateStatus('Error: Cannot send file. Data channel not open.');
+        return;
+      }
+      if (file.size > 10 * 1024 * 1024) { // Limit to 10MB
+        updateStatus('Error: File too large. Max size is 10MB.');
+        return;
+      }
+
+      const reader = new FileReader();
+      reader.onload = () => {
+        const base64 = reader.result;
+        const fileData = {
+          id: Date.now() + Math.random(), // Unique ID for IndexedDB
+          name: file.name,
+          mimeType: file.type,
+          base64: base64,
+          isLocal: true
+        };
+
+        // Save to IndexedDB
+        saveFileToDB(fileData).then(() => {
+          // Send file
+          const message = { type: 'file', content: fileData };
+          try {
+            dataChannel.send(JSON.stringify(message));
+            addFileComment(fileData, true);
+            fileInput.value = '';
+            updateStatus('File sent and saved locally.');
+          } catch (err) {
+            console.error('Error sending file:', err);
+            updateStatus('Error: Failed to send file.');
+          }
+        });
+      };
+      reader.onerror = () => {
+        updateStatus('Error: Failed to read file.');
+      };
+      reader.readAsDataURL(file);
     };
 
     // End call and cleanup
@@ -364,17 +619,32 @@
         dataChannel.close();
         dataChannel = null;
       }
-      remoteAudio.srcObject = null;
+      localVideo.srcObject = null;
+      remoteVideo.srcObject = null;
       offerText.value = '';
       answerText.value = '';
-      commentsDiv.innerHTML = '';
       commentInput.disabled = true;
       sendCommentBtn.disabled = true;
+      fileInput.disabled = true;
+      sendFileBtn.disabled = true;
       startCallBtn.disabled = false;
       copyOfferBtn.disabled = true;
       setRemoteBtn.disabled = true;
       endCallBtn.disabled = true;
+      toggleVideoBtn.disabled = true;
+      toggleAudioBtn.disabled = true;
+      toggleVideoBtn.textContent = 'Video On';
+      toggleAudioBtn.textContent = 'Audio On';
+      toggleVideoBtn.className = 'toggle-btn';
+      toggleAudioBtn.className = 'toggle-btn';
+      isVideoOn = true;
+      isAudioOn = true;
     }
+
+    // Load stored files on page load
+    window.onload = () => {
+      loadFilesFromDB();
+    };
   </script>
 </body>
 </html>
