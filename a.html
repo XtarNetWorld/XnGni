@@ -1,261 +1,380 @@
 <!DOCTYPE html>
-<html>
+<html lang="en">
 <head>
-    <title>P2P Voice Call</title>
-    <style>
-        body {
-            font-family: Arial, sans-serif;
-            max-width: 800px;
-            margin: 0 auto;
-            padding: 20px;
-        }
-        #container {
-            display: flex;
-            flex-direction: column;
-            gap: 20px;
-        }
-        textarea {
-            width: 100%;
-            height: 100px;
-            font-family: monospace;
-        }
-        button {
-            padding: 10px 15px;
-            background-color: #4CAF50;
-            color: white;
-            border: none;
-            cursor: pointer;
-            margin-right: 10px;
-        }
-        button:disabled {
-            background-color: #cccccc;
-        }
-        #status {
-            font-weight: bold;
-            margin: 10px 0;
-        }
-        #localAudio, #remoteAudio {
-            display: none;
-        }
-    </style>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>P2P Voice Call App</title>
+  <style>
+    body {
+      font-family: Arial, sans-serif;
+      display: flex;
+      flex-direction: column;
+      align-items: center;
+      background-color: #f0f0f0;
+      margin: 0;
+      padding: 20px;
+    }
+    h1 {
+      color: #333;
+      font-size: 24px;
+    }
+    #container {
+      background: white;
+      padding: 20px;
+      border-radius: 8px;
+      box-shadow: 0 0 10px rgba(0,0,0,0.1);
+      width: 100%;
+      max-width: 600px;
+      text-align: center;
+    }
+    button {
+      background-color: #4CAF50;
+      color: white;
+      padding: 10px 20px;
+      margin: 5px;
+      border: none;
+      border-radius: 4px;
+      cursor: pointer;
+      font-size: 16px;
+    }
+    button:hover {
+      background-color: #45a049;
+    }
+    button:disabled {
+      background-color: #cccccc;
+      cursor: not-allowed;
+    }
+    textarea {
+      width: 100%;
+      height: 100px;
+      margin: 10px 0;
+      padding: 10px;
+      border: 1px solid #ccc;
+      border-radius: 4px;
+      resize: vertical;
+      font-family: monospace;
+      font-size: 14px;
+    }
+    #status {
+      margin: 10px 0;
+      color: #333;
+      font-size: 16px;
+    }
+    #remote-audio {
+      display: none;
+    }
+    #comment-section {
+      margin-top: 20px;
+      text-align: left;
+    }
+    #comment-input {
+      width: calc(100% - 90px);
+      padding: 10px;
+      border: 1px solid #ccc;
+      border-radius: 4px;
+      font-size: 14px;
+    }
+    #send-comment {
+      width: 80px;
+      margin-left: 10px;
+    }
+    #comments {
+      border: 1px solid #ccc;
+      border-radius: 4px;
+      padding: 10px;
+      max-height: 150px;
+      overflow-y: auto;
+      margin-top: 10px;
+      background-color: #f9f9f9;
+    }
+    .comment {
+      margin: 5px 0;
+      font-size: 14px;
+    }
+    .comment.local {
+      color: #4CAF50;
+      text-align: right;
+    }
+    .comment.remote {
+      color: #333;
+      text-align: left;
+    }
+  </style>
 </head>
 <body>
-    <div id="container">
-        <h1>P2P Voice Call</h1>
-        
-        <div>
-            <button id="startButton">Start Call</button>
-            <button id="callButton" disabled>Create Offer</button>
-            <button id="answerButton" disabled>Answer Call</button>
-            <button id="hangupButton" disabled>Hang Up</button>
-        </div>
-        
-        <div id="status">Status: Ready</div>
-        
-        <div>
-            <h3>Local Offer/Answer</h3>
-            <textarea id="localSdp" readonly placeholder="Local SDP will appear here"></textarea>
-            <button id="copyLocal">Copy</button>
-        </div>
-        
-        <div>
-            <h3>Remote Offer/Answer</h3>
-            <textarea id="remoteSdp" placeholder="Paste remote SDP here"></textarea>
-            <button id="pasteRemote">Paste</button>
-        </div>
-        
-        <audio id="localAudio" muted controls></audio>
-        <audio id="remoteAudio" controls></audio>
+  <h1>P2P Voice Call App</h1>
+  <div id="container">
+    <div id="status">Status: Idle</div>
+    <button id="start-call">Start Call (Create Offer)</button>
+    <button id="copy-offer" disabled>Copy Offer</button>
+    <textarea id="offer-text" placeholder="Your offer will appear here..." readonly></textarea>
+    <textarea id="answer-text" placeholder="Paste remote offer/answer here..."></textarea>
+    <button id="set-remote" disabled>Set Remote SDP</button>
+    <button id="end-call" disabled>End Call</button>
+    <audio id="remote-audio" autoplay></audio>
+    <div id="comment-section">
+      <input id="comment-input" type="text" placeholder="Type a comment..." disabled>
+      <button id="send-comment" disabled>Send</button>
+      <div id="comments"></div>
     </div>
+  </div>
 
-    <script>
-        // DOM elements
-        const startButton = document.getElementById('startButton');
-        const callButton = document.getElementById('callButton');
-        const answerButton = document.getElementById('answerButton');
-        const hangupButton = document.getElementById('hangupButton');
-        const localSdp = document.getElementById('localSdp');
-        const remoteSdp = document.getElementById('remoteSdp');
-        const copyLocal = document.getElementById('copyLocal');
-        const pasteRemote = document.getElementById('pasteRemote');
-        const status = document.getElementById('status');
-        const localAudio = document.getElementById('localAudio');
-        const remoteAudio = document.getElementById('remoteAudio');
+  <script>
+    // Check WebRTC support
+    if (!window.RTCPeerConnection) {
+      alert('WebRTC is not supported in this browser. Use Chrome, Firefox, Edge, or Safari.');
+      document.getElementById('status').textContent = 'Error: WebRTC not supported.';
+      document.getElementById('start-call').disabled = true;
+    }
 
-        // WebRTC variables
-        let localStream;
-        let peerConnection;
+    // WebRTC configuration with multiple STUN servers
+    const config = {
+      iceServers: [
+        { urls: 'stun:stun.l.google.com:19302' },
+        { urls: 'stun:stun.stunprotocol.org:3478' },
+        { urls: 'stun:stun1.l.google.com:19302' },
+        { urls: 'stun:stun4.l.google.com:19302' }
+      ]
+    };
 
-        // Configuration with STUN servers
-        const configuration = {
-            iceServers: [
-                { urls: 'stun:stun.l.google.com:19302' },
-                { urls: 'stun:stun1.l.google.com:19302' },
-                { urls: 'stun:stun2.l.google.com:19302' }
-            ]
+    // DOM elements
+    const startCallBtn = document.getElementById('start-call');
+    const copyOfferBtn = document.getElementById('copy-offer');
+    const setRemoteBtn = document.getElementById('set-remote');
+    const endCallBtn = document.getElementById('end-call');
+    const offerText = document.getElementById('offer-text');
+    const answerText = document.getElementById('answer-text');
+    const status = document.getElementById('status');
+    const remoteAudio = document.getElementById('remote-audio');
+    const commentInput = document.getElementById('comment-input');
+    const sendCommentBtn = document.getElementById('send-comment');
+    const commentsDiv = document.getElementById('comments');
+
+    let peerConnection = null;
+    let localStream = null;
+    let dataChannel = null;
+
+    // Update status message
+    function updateStatus(message) {
+      status.textContent = `Status: ${message}`;
+      console.log(`Status: ${message}`);
+    }
+
+    // Add comment to the UI
+    function addComment(text, isLocal) {
+      const comment = document.createElement('div');
+      comment.className = `comment ${isLocal ? 'local' : 'remote'}`;
+      comment.textContent = text;
+      commentsDiv.appendChild(comment);
+      commentsDiv.scrollTop = commentsDiv.scrollHeight;
+    }
+
+    // Initialize WebRTC peer connection
+    async function initPeerConnection() {
+      try {
+        peerConnection = new RTCPeerConnection(config);
+        updateStatus('Peer connection initialized.');
+
+        // Create data channel for comments
+        dataChannel = peerConnection.createDataChannel('comments');
+        dataChannel.onopen = () => {
+          console.log('Data channel opened');
+          commentInput.disabled = false;
+          sendCommentBtn.disabled = false;
+          updateStatus('Data channel ready for comments.');
+        };
+        dataChannel.onmessage = (event) => {
+          addComment(`Remote: ${event.data}`, false);
+        };
+        dataChannel.onclose = () => {
+          console.log('Data channel closed');
+          commentInput.disabled = true;
+          sendCommentBtn.disabled = true;
         };
 
-        // Start button - gets user media
-        startButton.addEventListener('click', async () => {
-            try {
-                status.textContent = 'Getting user media...';
-                localStream = await navigator.mediaDevices.getUserMedia({ audio: true, video: false });
-                
-                // Display local audio stream
-                localAudio.srcObject = localStream;
-                localAudio.style.display = 'block';
-                
-                status.textContent = 'Ready to create or answer call';
-                startButton.disabled = true;
-                callButton.disabled = false;
-                answerButton.disabled = false;
-            } catch (err) {
-                status.textContent = `Error getting user media: ${err}`;
-                console.error(err);
-            }
-        });
+        // Handle incoming data channel (for the answerer)
+        peerConnection.ondatachannel = (event) => {
+          dataChannel = event.channel;
+          dataChannel.onopen = () => {
+            console.log('Data channel opened');
+            commentInput.disabled = false;
+            sendCommentBtn.disabled = false;
+            updateStatus('Data channel ready for comments.');
+          };
+          dataChannel.onmessage = (event) => {
+            addComment(`Remote: ${event.data}`, false);
+          };
+          dataChannel.onclose = () => {
+            console.log('Data channel closed');
+            commentInput.disabled = true;
+            sendCommentBtn.disabled = true;
+          };
+        };
 
-        // Call button - creates offer
-        callButton.addEventListener('click', async () => {
-            try {
-                status.textContent = 'Creating offer...';
-                peerConnection = new RTCPeerConnection(configuration);
-                
-                // Add local stream to connection
-                localStream.getTracks().forEach(track => {
-                    peerConnection.addTrack(track, localStream);
-                });
-                
-                // Set up ICE candidate handler
-                peerConnection.onicecandidate = event => {
-                    if (event.candidate) {
-                        // Update SDP with new candidates
-                        localSdp.value = JSON.stringify(peerConnection.localDescription);
-                    }
-                };
-                
-                // Set up remote stream handler
-                peerConnection.ontrack = event => {
-                    remoteAudio.srcObject = event.streams[0];
-                    remoteAudio.style.display = 'block';
-                    status.textContent = 'Call connected!';
-                };
-                
-                // Create offer
-                const offer = await peerConnection.createOffer();
-                await peerConnection.setLocalDescription(offer);
-                
-                localSdp.value = JSON.stringify(offer);
-                status.textContent = 'Offer created - copy and send to other peer';
-                callButton.disabled = true;
-                hangupButton.disabled = false;
-            } catch (err) {
-                status.textContent = `Error creating offer: ${err}`;
-                console.error(err);
-            }
-        });
+        // Handle ICE candidates
+        peerConnection.onicecandidate = ({ candidate }) => {
+          console.log('ICE Candidate:', candidate);
+          if (!candidate) {
+            offerText.value = JSON.stringify(peerConnection.localDescription);
+            copyOfferBtn.disabled = false;
+            updateStatus('Offer/Answer generated. Copy and share it.');
+          }
+        };
 
-        // Answer button - creates answer
-        answerButton.addEventListener('click', async () => {
-            try {
-                if (!remoteSdp.value) {
-                    status.textContent = 'Please paste the offer from the other peer';
-                    return;
-                }
-                
-                status.textContent = 'Creating answer...';
-                peerConnection = new RTCPeerConnection(configuration);
-                
-                // Add local stream to connection
-                localStream.getTracks().forEach(track => {
-                    peerConnection.addTrack(track, localStream);
-                });
-                
-                // Set up ICE candidate handler
-                peerConnection.onicecandidate = event => {
-                    if (event.candidate) {
-                        // Update SDP with new candidates
-                        localSdp.value = JSON.stringify(peerConnection.localDescription);
-                    }
-                };
-                
-                // Set up remote stream handler
-                peerConnection.ontrack = event => {
-                    remoteAudio.srcObject = event.streams[0];
-                    remoteAudio.style.display = 'block';
-                    status.textContent = 'Call connected!';
-                };
-                
-                // Set remote description from offer
-                const offer = JSON.parse(remoteSdp.value);
-                await peerConnection.setRemoteDescription(new RTCSessionDescription(offer));
-                
-                // Create answer
-                const answer = await peerConnection.createAnswer();
-                await peerConnection.setLocalDescription(answer);
-                
-                localSdp.value = JSON.stringify(answer);
-                status.textContent = 'Answer created - copy and send to other peer';
-                answerButton.disabled = true;
-                hangupButton.disabled = false;
-            } catch (err) {
-                status.textContent = `Error creating answer: ${err}`;
-                console.error(err);
-            }
-        });
+        // Handle ICE connection state
+        peerConnection.oniceconnectionstatechange = () => {
+          console.log('ICE Connection State:', peerConnection.iceConnectionState);
+          if (peerConnection.iceConnectionState === 'connected') {
+            alert('Devices connected! Voice call is active.');
+            updateStatus('Connected! Voice call active.');
+          } else if (peerConnection.iceConnectionState === 'failed') {
+            updateStatus('Error: ICE connection failed. Try a different network or add a TURN server.');
+          }
+        };
 
-        // Hang up button
-        hangupButton.addEventListener('click', () => {
-            if (peerConnection) {
-                peerConnection.close();
-                peerConnection = null;
-            }
-            if (localStream) {
-                localStream.getTracks().forEach(track => track.stop());
-            }
-            
-            localAudio.srcObject = null;
-            remoteAudio.srcObject = null;
-            localAudio.style.display = 'none';
-            remoteAudio.style.display = 'none';
-            
-            status.textContent = 'Call ended';
-            startButton.disabled = false;
-            callButton.disabled = true;
-            answerButton.disabled = true;
-            hangupButton.disabled = true;
-            localSdp.value = '';
-            remoteSdp.value = '';
-        });
+        // Handle ICE gathering state
+        peerConnection.onicegatheringstatechange = () => {
+          console.log('ICE Gathering State:', peerConnection.iceGatheringState);
+        };
 
-        // Copy local SDP
-        copyLocal.addEventListener('click', () => {
-            localSdp.select();
-            document.execCommand('copy');
-            status.textContent = 'Copied to clipboard!';
-            setTimeout(() => {
-                if (peerConnection && peerConnection.connectionState === 'connected') {
-                    status.textContent = 'Call connected!';
-                } else {
-                    status.textContent = 'Ready';
-                }
-            }, 1000);
-        });
+        // Handle remote stream
+        peerConnection.ontrack = (event) => {
+          remoteAudio.srcObject = event.streams[0];
+          endCallBtn.disabled = false;
+        };
 
-        // Paste remote SDP
-        pasteRemote.addEventListener('click', async () => {
-            try {
-                const text = await navigator.clipboard.readText();
-                remoteSdp.value = text;
-                status.textContent = 'Pasted from clipboard!';
-                setTimeout(() => {
-                    status.textContent = 'Ready';
-                }, 1000);
-            } catch (err) {
-                status.textContent = 'Failed to paste from clipboard';
-                console.error(err);
-            }
-        });
-    </script>
+        // Get local audio stream
+        try {
+          localStream = await navigator.mediaDevices.getUserMedia({ audio: true });
+          localStream.getTracks().forEach(track => peerConnection.addTrack(track, localStream));
+          updateStatus('Microphone access granted.');
+        } catch (err) {
+          console.error('Error accessing microphone:', err);
+          updateStatus('Error: Could not access microphone. Check permissions.');
+          throw err;
+        }
+      } catch (err) {
+        console.error('Error initializing peer connection:', err);
+        updateStatus('Error: Failed to initialize peer connection.');
+        cleanup();
+      }
+    }
+
+    // Start call and create offer
+    startCallBtn.onclick = async () => {
+      updateStatus('Starting call...');
+      await initPeerConnection();
+      if (!peerConnection) return;
+
+      try {
+        const offer = await peerConnection.createOffer();
+        await peerConnection.setLocalDescription(offer);
+        updateStatus('Generating offer... Waiting for ICE candidates.');
+
+        // Timeout for ICE gathering (5 seconds)
+        setTimeout(() => {
+          if (offerText.value === '') {
+            offerText.value = JSON.stringify(peerConnection.localDescription);
+            copyOfferBtn.disabled = false;
+            updateStatus('Offer generated (forced after timeout). Copy and share it.');
+            console.warn('ICE gathering timed out. SDP generated with available candidates.');
+          }
+        }, 5000);
+
+        startCallBtn.disabled = true;
+        setRemoteBtn.disabled = false;
+      } catch (err) {
+        console.error('Error creating offer:', err);
+        updateStatus('Error: Failed to create offer.');
+        cleanup();
+      }
+    };
+
+    // Copy SDP to clipboard
+    copyOfferBtn.onclick = () => {
+      offerText.select();
+      document.execCommand('copy');
+      updateStatus('Offer/Answer copied to clipboard. Share it with the other user.');
+    };
+
+    // Set remote SDP (offer or answer)
+    setRemoteBtn.onclick = async () => {
+      const remoteSdp = answerText.value.trim();
+      if (!remoteSdp) {
+        updateStatus('Error: Please paste remote SDP.');
+        return;
+      }
+
+      try {
+        const remoteDesc = JSON.parse(remoteSdp);
+        await peerConnection.setRemoteDescription(new RTCSessionDescription(remoteDesc));
+        updateStatus('Remote SDP set.');
+
+        // If this is an offer, create and set answer
+        if (remoteDesc.type === 'offer') {
+          const answer = await peerConnection.createAnswer();
+          await peerConnection.setLocalDescription(answer);
+          updateStatus('Answer generated. Copy and share it.');
+          offerText.value = JSON.stringify(peerConnection.localDescription);
+          copyOfferBtn.disabled = false;
+        }
+      } catch (err) {
+        console.error('Error setting remote SDP:', err);
+        updateStatus('Error: Invalid or failed to set remote SDP.');
+      }
+    };
+
+    // Send comment via data channel
+    sendCommentBtn.onclick = () => {
+      const comment = commentInput.value.trim();
+      if (comment && dataChannel && dataChannel.readyState === 'open') {
+        dataChannel.send(comment);
+        addComment(`You: ${comment}`, true);
+        commentInput.value = '';
+      } else {
+        updateStatus('Error: Cannot send comment. Data channel not open.');
+      }
+    };
+
+    // Allow sending comment with Enter key
+    commentInput.onkeypress = (e) => {
+      if (e.key === 'Enter' && !e.shiftKey) {
+        e.preventDefault();
+        sendCommentBtn.click();
+      }
+    };
+
+    // End call and cleanup
+    endCallBtn.onclick = () => {
+      cleanup();
+      updateStatus('Call ended.');
+    };
+
+    // Cleanup function
+    function cleanup() {
+      if (localStream) {
+        localStream.getTracks().forEach(track => track.stop());
+        localStream = null;
+      }
+      if (peerConnection) {
+        peerConnection.close();
+        peerConnection = null;
+      }
+      if (dataChannel) {
+        dataChannel.close();
+        dataChannel = null;
+      }
+      remoteAudio.srcObject = null;
+      offerText.value = '';
+      answerText.value = '';
+      commentsDiv.innerHTML = '';
+      commentInput.disabled = true;
+      sendCommentBtn.disabled = true;
+      startCallBtn.disabled = false;
+      copyOfferBtn.disabled = true;
+      setRemoteBtn.disabled = true;
+      endCallBtn.disabled = true;
+    }
+  </script>
 </body>
 </html>
