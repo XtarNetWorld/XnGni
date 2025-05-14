@@ -1130,860 +1130,760 @@
     <div id="toast-container"></div>
     
     <script>
-        // Firebase Configuration
-        const firebaseConfig = {
-            apiKey: "AIzaSyD-W60vJsi_7JXpB7B09jEfmYgcyRKMpUE",
-            authDomain: "calling-root.firebaseapp.com",
-            projectId: "calling-root",
-            storageBucket: "calling-root.firebasestorage.app",
-            messagingSenderId: "725099221629",
-            appId: "1:725099221629:web:ac55d0a373c0ae3a38d714",
-            measurementId: "G-DVL3HN8VJ1"
+// Firebase Configuration
+const firebaseConfig = {
+    apiKey: "AIzaSyD-W60vJsi_7JXpB7B09jEfmYgcyRKMpUE",
+    authDomain: "calling-root.firebaseapp.com",
+    projectId: "calling-root",
+    storageBucket: "calling-root.firebasestorage.app",
+    messagingSenderId: "725099221629",
+    appId: "1:725099221629:web:ac55d0a373c0ae3a38d714",
+    measurementId: "G-DVL3HN8VJ1"
+};
+
+// Initialize Firebase
+firebase.initializeApp(firebaseConfig);
+
+// Firebase references
+const auth = firebase.auth();
+const db = firebase.firestore();
+const rtdb = firebase.database();
+
+// Global variables
+let currentUser = null;
+let callTimer = null;
+let callDuration = 0;
+let isMuted = false;
+let isSpeakerOn = false;
+let currentCallId = null;
+let callStatus = 'idle';
+let activeCallRef = null;
+let ringtone = null;
+let callTone = null;
+
+// WebRTC configuration
+const configuration = {
+    iceServers: [
+        { urls: 'stun:stun.l.google.com:19302' },
+        { urls: 'stun:stun1.l.google.com:19302' }
+    ]
+};
+
+// Show splash screen for 3 seconds then show login screen
+window.onload = function() {
+    ringtone = new Audio('https://firebasestorage.googleapis.com/v0/b/calling-root.appspot.com/o/ringtone.mp3?alt=media');
+    ringtone.loop = true;
+    
+    callTone = new Audio('https://firebasestorage.googleapis.com/v0/b/calling-root.appspot.com/o/call-tone.mp3?alt=media');
+    callTone.loop = true;
+    
+    setTimeout(() => {
+        document.getElementById('splash-screen').style.opacity = '0';
+        setTimeout(() => {
+            document.getElementById('splash-screen').style.display = 'none';
+            document.getElementById('login-screen').style.display = 'flex';
+        }, 500);
+    }, 3000);
+};
+
+// Show owner info modal
+function showOwnerInfo() {
+    document.getElementById('owner-info').style.display = 'flex';
+}
+
+// Hide owner info modal
+function hideOwnerInfo() {
+    document.getElementById('owner-info').style.display = 'none';
+}
+
+// Preview user icon
+function previewUserIcon(event) {
+    const file = event.target.files[0];
+    const preview = document.getElementById('user-icon-preview');
+    if (file) {
+        const reader = new FileReader();
+        reader.onload = function(e) {
+            preview.innerHTML = `<img src="${e.target.result}" alt="User Icon">`;
         };
-        
-        // Initialize Firebase
-        firebase.initializeApp(firebaseConfig);
-        
-        // Firebase references
-        const auth = firebase.auth();
-        const db = firebase.firestore();
-        const storage = firebase.storage();
-        const rtdb = firebase.database();
-        
-        // Global variables
-        let currentUser = null;
-        let userIconFile = null;
-        let callTimer = null;
-        let callDuration = 0;
-        let isMuted = false;
-        let isSpeakerOn = false;
-        let currentCall = null;
-        let localStream = null;
-        let peerConnection = null;
-        let callHistory = [];
-        let ringtone = null;
-        let callTone = null;
-        let currentCallId = null;
-        let callStatus = 'idle'; // idle, calling, receiving, active
-        let activeCallRef = null;
-        
-        // WebRTC configuration
-        const configuration = {
-            iceServers: [
-                { urls: 'stun:stun.l.google.com:19302' },
-                { urls: 'stun:stun1.l.google.com:19302' }
-            ]
-        };
-        
-        // Show splash screen for 3 seconds then show login screen
-        window.onload = function() {
-            // Initialize audio elements
-            ringtone = new Audio('https://firebasestorage.googleapis.com/v0/b/calling-root.appspot.com/o/ringtone.mp3?alt=media');
-            ringtone.loop = true;
+        reader.readAsDataURL(file);
+    } else {
+        preview.innerHTML = `<i class="fas fa-user"></i>`;
+    }
+}
+
+// Validate phone number
+function isValidPhoneNumber(phone) {
+    const phoneRegex = /^\+?[0-9]{10,15}$/;
+    return phoneRegex.test(phone);
+}
+
+// Login function
+function login() {
+    const username = document.getElementById('username').value.trim();
+    const mobile = document.getElementById('mobile').value.trim();
+    
+    if (!username || !mobile) {
+        showToast('Please enter both username and mobile number', 'error');
+        return;
+    }
+    
+    if (!isValidPhoneNumber(mobile)) {
+        showToast('Please enter a valid mobile number (10-15 digits, optional +)', 'error');
+        return;
+    }
+    
+    // Sign in anonymously
+    auth.signInAnonymously()
+        .then((userCredential) => {
+            const uid = userCredential.user.uid;
+            const defaultIconUrl = 'https://via.placeholder.com/40';
+            const userIconPreview = document.getElementById('user-icon-preview').querySelector('img');
+            const userIconUrl = userIconPreview ? userIconPreview.src : defaultIconUrl;
             
-            callTone = new Audio('https://firebasestorage.googleapis.com/v0/b/calling-root.appspot.com/o/call-tone.mp3?alt=media');
-            callTone.loop = true;
-            
-            setTimeout(() => {
-                document.getElementById('splash-screen').style.opacity = '0';
-                setTimeout(() => {
-                    document.getElementById('splash-screen').style.display = 'none';
-                    document.getElementById('login-screen').style.display = 'flex';
-                }, 500);
-            }, 3000);
-        };
-        
-        // Show owner info modal
-        function showOwnerInfo() {
-            document.getElementById('owner-info').style.display = 'flex';
-        }
-        
-        // Hide owner info modal
-        function hideOwnerInfo() {
-            document.getElementById('owner-info').style.display = 'none';
-        }
-        
-        // Preview user icon
-        function previewUserIcon(event) {
-            const file = event.target.files[0];
-            if (file) {
-                userIconFile = file;
-                const reader = new FileReader();
-                reader.onload = function(e) {
-                    const preview = document.getElementById('user-icon-preview');
-                    preview.innerHTML = `<img src="${e.target.result}" alt="User Icon">`;
-                };
-                reader.readAsDataURL(file);
-            }
-        }
-        
-        // Login function
-        function login() {
-            const username = document.getElementById('username').value;
-            const mobile = document.getElementById('mobile').value;
-            
-            if (!username || !mobile) {
-                showToast('Please enter both username and mobile number', 'error');
-                return;
-            }
-            
-            // Validate mobile number
-            if (!isValidPhoneNumber(mobile)) {
-                showToast('Please enter a valid mobile number', 'error');
-                return;
-            }
-            
-            // For demo purposes, we'll store the user info in Firebase
-            const userIconUrl = userIconFile ? URL.createObjectURL(userIconFile) : 'https://via.placeholder.com/40';
-            
-            // Store user data in Firestore
-            db.collection('users').doc(mobile).set({
+            // Store user data in Firestore with uid as document ID
+            return db.collection('users').doc(uid).set({
                 username: username,
                 mobile: mobile,
                 iconUrl: userIconUrl,
                 status: 'online',
                 lastSeen: firebase.firestore.FieldValue.serverTimestamp()
-            })
-            .then(() => {
-                currentUser = {
-                    username: username,
-                    mobile: mobile,
-                    iconUrl: userIconUrl
-                };
+            });
+        })
+        .then(() => {
+            currentUser = {
+                uid: auth.currentUser.uid,
+                username: username,
+                mobile: mobile,
+                iconUrl: document.getElementById('user-icon-preview').querySelector('img')?.src || 'https://via.placeholder.com/40'
+            };
+            
+            // Update user profile in header
+            document.getElementById('user-profile-pic').src = currentUser.iconUrl;
+            document.getElementById('user-profile-name').textContent = currentUser.username;
+            
+            // Show call screen
+            document.getElementById('login-screen').style.display = 'none';
+            document.getElementById('call-screen').style.display = 'flex';
+            
+            // Load call history
+            loadCallHistory();
+            
+            // Listen for incoming calls
+            listenForIncomingCalls();
+            
+            showToast('Logged in successfully', 'success');
+        })
+        .catch((error) => {
+            console.error('Login error:', error);
+            if (error.code === 'permission-denied') {
+                showToast('Permission denied. Check Firestore rules.', 'error');
+            } else if (error.code === 'auth/operation-not-allowed') {
+                showToast('Anonymous auth not enabled in Firebase. Enable it in the Console.', 'error');
+            } else {
+                showToast(`Login failed: ${error.message}`, 'error');
+            }
+        });
+}
+
+// Updated listenForIncomingCalls
+function listenForIncomingCalls() {
+    if (!currentUser) return;
+    
+    db.collection('calls')
+        .where('recipient', '==', currentUser.mobile)
+        .where('status', '==', 'calling')
+        .onSnapshot((snapshot) => {
+            snapshot.docChanges().forEach((change) => {
+                if (change.type === 'added') {
+                    const callData = change.doc.data();
+                    handleIncomingCall(change.doc.id, callData);
+                }
+            });
+        });
+}
+
+// Updated handleIncomingCall
+function handleIncomingCall(callId, callData) {
+    if (callStatus !== 'idle') {
+        updateCallStatus(callId, 'missed');
+        return;
+    }
+    
+    currentCallId = callId;
+    callStatus = 'receiving';
+    
+    db.collection('users').where('mobile', '==', callData.caller).get()
+        .then((querySnapshot) => {
+            let callerData = { username: 'Unknown Caller', mobile: callData.caller, iconUrl: 'https://via.placeholder.com/120' };
+            if (!querySnapshot.empty) {
+                callerData = querySnapshot.docs[0].data();
+            }
+            
+            document.getElementById('incoming-caller-name').textContent = callerData.username;
+            document.getElementById('incoming-caller-number').textContent = callerData.mobile;
+            document.getElementById('incoming-caller-pic').src = callerData.iconUrl || 'https://via.placeholder.com/120';
+            
+            document.getElementById('call-screen').style.display = 'none';
+            document.getElementById('incoming-call-screen').style.display = 'flex';
+            
+            ringtone.play().catch(e => console.log('Error playing ringtone:', e));
+        })
+        .catch((error) => {
+            console.error('Error getting caller info:', error);
+            showToast('Error getting caller info', 'error');
+        });
+}
+
+// Updated startCall
+function startCall() {
+    const callNumber = document.getElementById('call-number').value;
+    
+    if (!callNumber) {
+        showToast('Please enter a phone number to call', 'error');
+        return;
+    }
+    
+    if (!isValidPhoneNumber(callNumber)) {
+        showToast('Please enter a valid phone number', 'error');
+        return;
+    }
+    
+    if (callNumber === currentUser.mobile) {
+        showToast('You cannot call yourself', 'error');
+        return;
+    }
+    
+    db.collection('users').where('mobile', '==', callNumber).get()
+        .then((querySnapshot) => {
+            if (!querySnapshot.empty) {
+                const recipientData = querySnapshot.docs[0].data();
                 
-                // Update user profile in header
-                document.getElementById('user-profile-pic').src = currentUser.iconUrl;
-                document.getElementById('user-profile-name').textContent = currentUser.username;
+                db.collection('calls').add({
+                    caller: currentUser.mobile,
+                    recipient: callNumber,
+                    startTime: firebase.firestore.FieldValue.serverTimestamp(),
+                    status: 'calling',
+                    duration: 0
+                })
+                .then((docRef) => {
+                    currentCallId = docRef.id;
+                    callStatus = 'calling';
+                    
+                    hideNewCallModal();
+                    
+                    document.getElementById('active-caller-name').textContent = recipientData.username;
+                    document.getElementById('active-caller-number').textContent = recipientData.mobile;
+                    document.getElementById('active-caller-pic').src = recipientData.iconUrl || 'https://via.placeholder.com/120';
+                    document.getElementById('call-status-text').textContent = 'Calling...';
+                    
+                    document.getElementById('call-screen').style.display = 'none';
+                    document.getElementById('active-call-screen').style.display = 'flex';
+                    
+                    callTone.play().catch(e => console.log('Error playing call tone:', e));
+                    
+                    listenForCallStatusChanges(docRef.id);
+                    
+                    setupWebRTC();
+                    
+                    setTimeout(() => {
+                        if (callStatus === 'calling') {
+                            updateCallStatus(docRef.id, 'missed');
+                            endCall();
+                        }
+                    }, 30000);
+                })
+                .catch((error) => {
+                    console.error('Error creating call:', error);
+                    showToast('Failed to start call. Please try again.', 'error');
+                });
+            } else {
+                showToast('User not found. Please check the number and try again.', 'error');
+            }
+        })
+        .catch((error) => {
+            console.error('Error checking user:', error);
+            showToast('Failed to check user. Please try again.', 'error');
+        });
+}
+
+// Updated loadCallHistory
+function loadCallHistory() {
+    if (!currentUser) return;
+    
+    callHistory = [];
+    const callHistoryElement = document.getElementById('call-history');
+    callHistoryElement.innerHTML = '';
+    
+    db.collection('calls')
+        .where('caller', '==', currentUser.mobile)
+        .get()
+        .then((querySnapshot) => {
+            querySnapshot.forEach((doc) => {
+                const callData = doc.data();
+                callData.id = doc.id;
+                callData.direction = 'outgoing';
+                callHistory.push(callData);
+            });
+            
+            return db.collection('calls')
+                .where('recipient', '==', currentUser.mobile)
+                .get();
+        })
+        .then((querySnapshot) => {
+            querySnapshot.forEach((doc) => {
+                const callData = doc.data();
+                callData.id = doc.id;
+                callData.direction = 'incoming';
+                callHistory.push(callData);
+            });
+            
+            callHistory.sort((a, b) => {
+                const timeA = a.startTime ? a.startTime.toDate() : new Date(0);
+                const timeB = b.startTime ? b.startTime.toDate() : new Date(0);
+                return timeB - timeA;
+            });
+            
+            displayCallHistory('all');
+        })
+        .catch((error) => {
+            console.error('Error loading call history:', error);
+            showToast('Failed to load call history', 'error');
+        });
+}
+
+// Updated displayCallHistory
+function displayCallHistory(filter) {
+    const callHistoryElement = document.getElementById('call-history');
+    callHistoryElement.innerHTML = '';
+    
+    const tabs = document.querySelectorAll('.call-filter-tab');
+    tabs.forEach(tab => {
+        tab.classList.remove('active');
+        if (tab.textContent.toLowerCase() === filter || 
+            (tab.textContent.toLowerCase() === 'all' && filter === 'all')) {
+            tab.classList.add('active');
+        }
+    });
+    
+    let filteredHistory = callHistory;
+    if (filter !== 'all') {
+        filteredHistory = callHistory.filter(call => {
+            if (filter === 'incoming' && call.direction === 'incoming' && call.status !== 'missed') {
+                return true;
+            } else if (filter === 'outgoing' && call.direction === 'outgoing') {
+                return true;
+            } else if (filter === 'missed' && call.status === 'missed') {
+                return true;
+            }
+            return false;
+        });
+    }
+    
+    if (filteredHistory.length === 0) {
+        callHistoryElement.innerHTML = '<div style="text-align: center; padding: 20px; color: #aaa;">No calls found</div>';
+        return;
+    }
+    
+    filteredHistory.forEach(call => {
+        const otherParty = call.direction === 'outgoing' ? call.recipient : call.caller;
+        
+        db.collection('users').where('mobile', '==', otherParty).get()
+            .then((querySnapshot) => {
+                let name = 'Unknown';
+                let iconUrl = 'https://via.placeholder.com/50';
                 
-                // Show call screen
-                document.getElementById('login-screen').style.display = 'none';
-                document.getElementById('call-screen').style.display = 'flex';
+                if (!querySnapshot.empty) {
+                    const userData = querySnapshot.docs[0].data();
+                    name = userData.username;
+                    iconUrl = userData.iconUrl || iconUrl;
+                }
                 
-                // Load call history
-                loadCallHistory();
+                const callItem = document.createElement('div');
+                callItem.className = 'call-item';
                 
-                // Listen for incoming calls
-                listenForIncomingCalls();
+                let statusIcon = '';
+                let statusClass = '';
                 
-                showToast('Logged in successfully', 'success');
+                if (call.direction === 'outgoing') {
+                    statusIcon = '<i class="fas fa-arrow-up"></i>';
+                    statusClass = 'call-status-outgoing';
+                } else if (call.direction === 'incoming') {
+                    if (call.status === 'missed') {
+                        statusIcon = '<i class="fas fa-arrow-down"></i>';
+                        statusClass = 'call-status-missed';
+                    } else {
+                        statusIcon = '<i class="fas fa-arrow-down"></i>';
+                        statusClass = 'call-status-incoming';
+                    }
+                }
+                
+                const callTime = call.startTime ? call.startTime.toDate() : new Date();
+                const formattedTime = formatCallTime(callTime);
+                
+                let durationText = '';
+                if (call.duration && call.duration > 0) {
+                    const minutes = Math.floor(call.duration / 60).toString().padStart(2, '0');
+                    const seconds = (call.duration % 60).toString().padStart(2, '0');
+                    durationText = `${minutes}:${seconds}`;
+                } else if (call.status === 'missed' || call.status === 'declined') {
+                    durationText = call.direction === 'outgoing' ? 'Not answered' : 'Missed call';
+                }
+                
+                callItem.innerHTML = `
+                    <img src="${iconUrl}" alt="${name}" class="call-item-pic">
+                    <div class="call-item-info">
+                        <div class="call-item-name">${name}</div>
+                        <div class="call-item-number">${otherParty}</div>
+                        <div class="call-item-status ${statusClass}">${statusIcon} ${durationText}</div>
+                        <div class="call-item-time">${formattedTime}</div>
+                    </div>
+                    <div class="call-item-action" onclick="startCallFromHistory('${otherParty}')">
+                        <i class="fas fa-phone-alt"></i>
+                    </div>
+                `;
+                
+                callHistoryElement.appendChild(callItem);
             })
             .catch((error) => {
-                console.error('Error storing user data:', error);
-                showToast('Failed to login. Please try again.', 'error');
+                console.error('Error getting user info:', error);
             });
-        }
-        
-        // Validate phone number
-        function isValidPhoneNumber(phone) {
-            const phoneRegex = /^\+?[0-9]{10,15}$/;
-            return phoneRegex.test(phone);
-        }
-        
-        // Listen for incoming calls
-        function listenForIncomingCalls() {
-            if (!currentUser) return;
+    });
+}
+
+// Remaining functions (unchanged)
+function showNewCallModal() {
+    document.getElementById('new-call-modal').style.display = 'flex';
+}
+
+function hideNewCallModal() {
+    document.getElementById('new-call-modal').style.display = 'none';
+}
+
+function listenForCallStatusChanges(callId) {
+    activeCallRef = db.collection('calls').doc(callId).onSnapshot((doc) => {
+        if (doc.exists) {
+            const callData = doc.data();
             
-            // Listen for calls where the recipient is the current user
-            db.collection('calls')
-                .where('recipient', '==', currentUser.mobile)
-                .where('status', '==', 'calling')
-                .onSnapshot((snapshot) => {
-                    snapshot.docChanges().forEach((change) => {
-                        if (change.type === 'added') {
-                            const callData = change.doc.data();
-                            handleIncomingCall(change.doc.id, callData);
-                        }
-                    });
-                });
-        }
-        
-        // Handle incoming call
-        function handleIncomingCall(callId, callData) {
-            if (callStatus !== 'idle') {
-                // Already in a call, auto decline
-                updateCallStatus(callId, 'missed');
-                return;
-            }
-            
-            currentCallId = callId;
-            callStatus = 'receiving';
-            
-            // Get caller info
-            db.collection('users').doc(callData.caller).get()
-                .then((doc) => {
-                    if (doc.exists) {
-                        const callerData = doc.data();
-                        
-                        // Set caller info
-                        document.getElementById('incoming-caller-name').textContent = callerData.username;
-                        document.getElementById('incoming-caller-number').textContent = callerData.mobile;
-                        document.getElementById('incoming-caller-pic').src = callerData.iconUrl || 'https://via.placeholder.com/120';
-                        
-                        // Show incoming call screen
-                        document.getElementById('call-screen').style.display = 'none';
-                        document.getElementById('incoming-call-screen').style.display = 'flex';
-                        
-                        // Play ringtone
-                        ringtone.play().catch(e => console.log('Error playing ringtone:', e));
-                    } else {
-                        // Caller not found
-                        document.getElementById('incoming-caller-name').textContent = 'Unknown Caller';
-                        document.getElementById('incoming-caller-number').textContent = callData.caller;
-                        document.getElementById('incoming-caller-pic').src = 'https://via.placeholder.com/120';
-                        
-                        // Show incoming call screen
-                        document.getElementById('call-screen').style.display = 'none';
-                        document.getElementById('incoming-call-screen').style.display = 'flex';
-                        
-                        // Play ringtone
-                        ringtone.play().catch(e => console.log('Error playing ringtone:', e));
-                    }
-                })
-                .catch((error) => {
-                    console.error('Error getting caller info:', error);
-                    showToast('Error getting caller info', 'error');
-                });
-        }
-        
-        // Show new call modal
-        function showNewCallModal() {
-            document.getElementById('new-call-modal').style.display = 'flex';
-        }
-        
-        // Hide new call modal
-        function hideNewCallModal() {
-            document.getElementById('new-call-modal').style.display = 'none';
-        }
-        
-        // Start a call
-        function startCall() {
-            const callNumber = document.getElementById('call-number').value;
-            
-            if (!callNumber) {
-                showToast('Please enter a phone number to call', 'error');
-                return;
-            }
-            
-            if (!isValidPhoneNumber(callNumber)) {
-                showToast('Please enter a valid phone number', 'error');
-                return;
-            }
-            
-            if (callNumber === currentUser.mobile) {
-                showToast('You cannot call yourself', 'error');
-                return;
-            }
-            
-            // Check if user exists
-            db.collection('users').doc(callNumber).get()
-                .then((doc) => {
-                    if (doc.exists) {
-                        const recipientData = doc.data();
-                        
-                        // Create a new call in Firestore
-                        db.collection('calls').add({
-                            caller: currentUser.mobile,
-                            recipient: callNumber,
-                            startTime: firebase.firestore.FieldValue.serverTimestamp(),
-                            status: 'calling',
-                            duration: 0
-                        })
-                        .then((docRef) => {
-                            currentCallId = docRef.id;
-                            callStatus = 'calling';
-                            
-                            // Hide new call modal
-                            hideNewCallModal();
-                            
-                            // Set caller info
-                            document.getElementById('active-caller-name').textContent = recipientData.username;
-                            document.getElementById('active-caller-number').textContent = recipientData.mobile;
-                            document.getElementById('active-caller-pic').src = recipientData.iconUrl || 'https://via.placeholder.com/120';
-                            document.getElementById('call-status-text').textContent = 'Calling...';
-                            
-                            // Show active call screen
-                            document.getElementById('call-screen').style.display = 'none';
-                            document.getElementById('active-call-screen').style.display = 'flex';
-                            
-                            // Play call tone
-                            callTone.play().catch(e => console.log('Error playing call tone:', e));
-                            
-                            // Listen for call status changes
-                            listenForCallStatusChanges(docRef.id);
-                            
-                            // Setup WebRTC
-                            setupWebRTC();
-                            
-                            // Auto end call if no answer after 30 seconds
-                            setTimeout(() => {
-                                if (callStatus === 'calling') {
-                                    updateCallStatus(docRef.id, 'missed');
-                                    endCall();
-                                }
-                            }, 30000);
-                        })
-                        .catch((error) => {
-                            console.error('Error creating call:', error);
-                            showToast('Failed to start call. Please try again.', 'error');
-                        });
-                    } else {
-                        showToast('User not found. Please check the number and try again.', 'error');
-                    }
-                })
-                .catch((error) => {
-                    console.error('Error checking user:', error);
-                    showToast('Failed to check user. Please try again.', 'error');
-                });
-        }
-        
-        // Listen for call status changes
-        function listenForCallStatusChanges(callId) {
-            activeCallRef = db.collection('calls').doc(callId).onSnapshot((doc) => {
-                if (doc.exists) {
-                    const callData = doc.data();
-                    
-                    if (callData.status === 'active' && callStatus === 'calling') {
-                        // Call was answered
-                        callStatus = 'active';
-                        document.getElementById('call-status-text').textContent = 'On Call';
-                        
-                        // Stop call tone
-                        callTone.pause();
-                        callTone.currentTime = 0;
-                        
-                        // Start call timer
-                        startCallTimer();
-                    } else if (callData.status === 'ended' || callData.status === 'declined') {
-                        // Call was ended or declined
-                        endCall();
-                    }
-                }
-            });
-        }
-        
-        // Update call status
-        function updateCallStatus(callId, status) {
-            if (!callId) return;
-            
-            const updateData = { status: status };
-            
-            if (status === 'ended' || status === 'declined' || status === 'missed') {
-                updateData.endTime = firebase.firestore.FieldValue.serverTimestamp();
-                if (callDuration > 0) {
-                    updateData.duration = callDuration;
-                }
-            } else if (status === 'active') {
-                updateData.answerTime = firebase.firestore.FieldValue.serverTimestamp();
-            }
-            
-            db.collection('calls').doc(callId).update(updateData)
-                .catch((error) => {
-                    console.error('Error updating call status:', error);
-                });
-        }
-        
-        // Setup WebRTC
-        async function setupWebRTC() {
-            try {
-                // Get local media stream
-                localStream = await navigator.mediaDevices.getUserMedia({ audio: true });
+            if (callData.status === 'active' && callStatus === 'calling') {
+                callStatus = 'active';
+                document.getElementById('call-status-text').textContent = 'On Call';
                 
-                // Create peer connection
-                peerConnection = new RTCPeerConnection(configuration);
+                callTone.pause();
+                callTone.currentTime = 0;
                 
-                // Add local stream to peer connection
-                localStream.getTracks().forEach(track => {
-                    peerConnection.addTrack(track, localStream);
-                });
-                
-                // Handle ICE candidates
-                peerConnection.onicecandidate = event => {
-                    if (event.candidate && currentCallId) {
-                        // Send ICE candidate to the other peer via Firebase
-                        const callRef = db.collection('calls').doc(currentCallId);
-                        
-                        if (callStatus === 'calling') {
-                            callRef.collection('callerCandidates').add(event.candidate.toJSON());
-                        } else if (callStatus === 'active') {
-                            callRef.collection('recipientCandidates').add(event.candidate.toJSON());
-                        }
-                    }
-                };
-                
-                // Handle incoming tracks
-                peerConnection.ontrack = event => {
-                    // Play remote stream
-                    const remoteStream = new MediaStream();
-                    event.streams[0].getTracks().forEach(track => {
-                        remoteStream.addTrack(track);
-                    });
-                    
-                    // Create audio element to play remote stream
-                    const remoteAudio = new Audio();
-                    remoteAudio.srcObject = remoteStream;
-                    remoteAudio.autoplay = true;
-                    
-                    // Set speaker mode
-                    if (isSpeakerOn) {
-                        remoteAudio.setSinkId('speaker').catch(e => console.log('Error setting audio output:', e));
-                    }
-                };
-                
-                // If caller, create and send offer
-                if (callStatus === 'calling') {
-                    const offer = await peerConnection.createOffer();
-                    await peerConnection.setLocalDescription(offer);
-                    
-                    // Send offer to recipient via Firebase
-                    const callRef = db.collection('calls').doc(currentCallId);
-                    await callRef.update({
-                        offer: {
-                            type: offer.type,
-                            sdp: offer.sdp
-                        }
-                    });
-                    
-                    // Listen for answer
-                    callRef.onSnapshot(async (snapshot) => {
-                        const data = snapshot.data();
-                        if (!peerConnection.currentRemoteDescription && data && data.answer) {
-                            const answer = new RTCSessionDescription(data.answer);
-                            await peerConnection.setRemoteDescription(answer);
-                        }
-                    });
-                    
-                    // Listen for recipient ICE candidates
-                    callRef.collection('recipientCandidates').onSnapshot(snapshot => {
-                        snapshot.docChanges().forEach(async change => {
-                            if (change.type === 'added') {
-                                const candidate = new RTCIceCandidate(change.doc.data());
-                                await peerConnection.addIceCandidate(candidate);
-                            }
-                        });
-                    });
-                }
-                
-                // If recipient, listen for offer and create answer
-                if (callStatus === 'receiving') {
-                    const callRef = db.collection('calls').doc(currentCallId);
-                    
-                    callRef.onSnapshot(async (snapshot) => {
-                        const data = snapshot.data();
-                        if (!peerConnection.currentRemoteDescription && data && data.offer) {
-                            const offer = new RTCSessionDescription(data.offer);
-                            await peerConnection.setRemoteDescription(offer);
-                            
-                            const answer = await peerConnection.createAnswer();
-                            await peerConnection.setLocalDescription(answer);
-                            
-                            await callRef.update({
-                                answer: {
-                                    type: answer.type,
-                                    sdp: answer.sdp
-                                }
-                            });
-                        }
-                    });
-                    
-                    // Listen for caller ICE candidates
-                    callRef.collection('callerCandidates').onSnapshot(snapshot => {
-                        snapshot.docChanges().forEach(async change => {
-                            if (change.type === 'added') {
-                                const candidate = new RTCIceCandidate(change.doc.data());
-                                await peerConnection.addIceCandidate(candidate);
-                            }
-                        });
-                    });
-                }
-                
-            } catch (error) {
-                console.error('Error setting up WebRTC:', error);
-                showToast('Error setting up call. Please try again.', 'error');
+                startCallTimer();
+            } else if (callData.status === 'ended' || callData.status === 'declined') {
                 endCall();
             }
         }
-        
-        // Answer incoming call
-        function answerCall() {
-            if (!currentCallId) return;
-            
-            // Stop ringtone
-            ringtone.pause();
-            ringtone.currentTime = 0;
-            
-            // Update call status
-            updateCallStatus(currentCallId, 'active');
-            callStatus = 'active';
-            
-            // Hide incoming call screen
-            document.getElementById('incoming-call-screen').style.display = 'none';
-            
-            // Set caller info for active call
-            document.getElementById('active-caller-name').textContent = document.getElementById('incoming-caller-name').textContent;
-            document.getElementById('active-caller-number').textContent = document.getElementById('incoming-caller-number').textContent;
-            document.getElementById('active-caller-pic').src = document.getElementById('incoming-caller-pic').src;
-            document.getElementById('call-status-text').textContent = 'On Call';
-            
-            // Show active call screen
-            document.getElementById('active-call-screen').style.display = 'flex';
-            
-            // Start call timer
-            startCallTimer();
-            
-            // Setup WebRTC
-            setupWebRTC();
+    });
+}
+
+function updateCallStatus(callId, status) {
+    if (!callId) return;
+    
+    const updateData = { status: status };
+    
+    if (status === 'ended' || status === 'declined' || status === 'missed') {
+        updateData.endTime = firebase.firestore.FieldValue.serverTimestamp();
+        if (callDuration > 0) {
+            updateData.duration = callDuration;
         }
+    } else if (status === 'active') {
+        updateData.answerTime = firebase.firestore.FieldValue.serverTimestamp();
+    }
+    
+    db.collection('calls').doc(callId).update(updateData)
+        .catch((error) => {
+            console.error('Error updating call status:', error);
+        });
+}
+
+async function setupWebRTC() {
+    try {
+        localStream = await navigator.mediaDevices.getUserMedia({ audio: true });
         
-        // Decline incoming call
-        function declineCall() {
-            if (!currentCallId) return;
-            
-            // Stop ringtone
-            ringtone.pause();
-            ringtone.currentTime = 0;
-            
-            // Update call status
-            updateCallStatus(currentCallId, 'declined');
-            callStatus = 'idle';
-            currentCallId = null;
-            
-            // Hide incoming call screen
-            document.getElementById('incoming-call-screen').style.display = 'none';
-            document.getElementById('call-screen').style.display = 'flex';
-            
-            // Refresh call history
-            loadCallHistory();
-        }
+        peerConnection = new RTCPeerConnection(configuration);
         
-        // End a call
-        function endCall() {
-            // Stop call timer
-            stopCallTimer();
-            
-            // Stop call tone
-            if (callTone) {
-                callTone.pause();
-                callTone.currentTime = 0;
-            }
-            
-            // Update call status if we're in an active call
-            if (currentCallId && (callStatus === 'calling' || callStatus === 'active')) {
-                updateCallStatus(currentCallId, 'ended');
-            }
-            
-            // Close WebRTC connection
-            if (peerConnection) {
-                peerConnection.close();
-                peerConnection = null;
-            }
-            
-            // Stop local stream
-            if (localStream) {
-                localStream.getTracks().forEach(track => track.stop());
-                localStream = null;
-            }
-            
-            // Unsubscribe from call status changes
-            if (activeCallRef) {
-                activeCallRef();
-                activeCallRef = null;
-            }
-            
-            // Reset call status
-            callStatus = 'idle';
-            currentCallId = null;
-            
-            // Hide active call screen
-            document.getElementById('active-call-screen').style.display = 'none';
-            document.getElementById('call-screen').style.display = 'flex';
-            
-            // Refresh call history
-            loadCallHistory();
-        }
+        localStream.getTracks().forEach(track => {
+            peerConnection.addTrack(track, localStream);
+        });
         
-        // Toggle mute
-        function toggleMute() {
-            if (localStream) {
-                isMuted = !isMuted;
-                localStream.getAudioTracks().forEach(track => {
-                    track.enabled = !isMuted;
-                });
+        peerConnection.onicecandidate = event => {
+            if (event.candidate && currentCallId) {
+                const callRef = db.collection('calls').doc(currentCallId);
                 
-                // Update UI
-                const muteIcon = document.getElementById('mute-icon');
-                if (isMuted) {
-                    muteIcon.classList.remove('fa-microphone');
-                    muteIcon.classList.add('fa-microphone-slash');
-                    showToast('Microphone muted', 'warning');
-                } else {
-                    muteIcon.classList.remove('fa-microphone-slash');
-                    muteIcon.classList.add('fa-microphone');
-                    showToast('Microphone unmuted', 'success');
+                if (callStatus === 'calling') {
+                    callRef.collection('callerCandidates').add(event.candidate.toJSON());
+                } else if (callStatus === 'active') {
+                    callRef.collection('recipientCandidates').add(event.candidate.toJSON());
                 }
             }
-        }
+        };
         
-        // Toggle speaker
-        function toggleSpeaker() {
-            isSpeakerOn = !isSpeakerOn;
+        peerConnection.ontrack = event => {
+            const remoteStream = new MediaStream();
+            event.streams[0].getTracks().forEach(track => {
+                remoteStream.addTrack(track);
+            });
             
-            // Update UI
-            const speakerIcon = document.getElementById('speaker-icon');
+            const remoteAudio = new Audio();
+            remoteAudio.srcObject = remoteStream;
+            remoteAudio.autoplay = true;
+            
             if (isSpeakerOn) {
-                speakerIcon.classList.remove('fa-volume-up');
-                speakerIcon.classList.add('fa-volume-mute');
-                showToast('Speaker off', 'warning');
-            } else {
-                speakerIcon.classList.remove('fa-volume-mute');
-                speakerIcon.classList.add('fa-volume-up');
-                showToast('Speaker on', 'success');
+                remoteAudio.setSinkId('speaker').catch(e => console.log('Error setting audio output:', e));
             }
-            
-            // In a real implementation, you would change the audio output device
-            // This requires the setSinkId API which is not supported in all browsers
-        }
+        };
         
-        // Start call timer
-        function startCallTimer() {
-            callDuration = 0;
-            callTimer = setInterval(() => {
-                callDuration++;
-                const minutes = Math.floor(callDuration / 60).toString().padStart(2, '0');
-                const seconds = (callDuration % 60).toString().padStart(2, '0');
-                document.getElementById('call-timer').textContent = `${minutes}:${seconds}`;
-            }, 1000);
-        }
-        
-        // Stop call timer
-        function stopCallTimer() {
-            if (callTimer) {
-                clearInterval(callTimer);
-                callTimer = null;
-            }
-        }
-        
-        // Load call history
-        function loadCallHistory() {
-            if (!currentUser) return;
+        if (callStatus === 'calling') {
+            const offer = await peerConnection.createOffer();
+            await peerConnection.setLocalDescription(offer);
             
-            // Clear existing call history
-            callHistory = [];
-            const callHistoryElement = document.getElementById('call-history');
-            callHistoryElement.innerHTML = '';
-            
-            // Get calls where the current user is either the caller or recipient
-            db.collection('calls')
-                .where('caller', '==', currentUser.mobile)
-                .get()
-                .then((querySnapshot) => {
-                    querySnapshot.forEach((doc) => {
-                        const callData = doc.data();
-                        callData.id = doc.id;
-                        callData.direction = 'outgoing';
-                        callHistory.push(callData);
-                    });
-                    
-                    return db.collection('calls')
-                        .where('recipient', '==', currentUser.mobile)
-                        .get();
-                })
-                .then((querySnapshot) => {
-                    querySnapshot.forEach((doc) => {
-                        const callData = doc.data();
-                        callData.id = doc.id;
-                        callData.direction = 'incoming';
-                        callHistory.push(callData);
-                    });
-                    
-                    // Sort call history by start time (newest first)
-                    callHistory.sort((a, b) => {
-                        const timeA = a.startTime ? a.startTime.toDate() : new Date(0);
-                        const timeB = b.startTime ? b.startTime.toDate() : new Date(0);
-                        return timeB - timeA;
-                    });
-                    
-                    // Display call history
-                    displayCallHistory('all');
-                })
-                .catch((error) => {
-                    console.error('Error loading call history:', error);
-                    showToast('Failed to load call history', 'error');
-                });
-        }
-        
-        // Display call history based on filter
-        function displayCallHistory(filter) {
-            const callHistoryElement = document.getElementById('call-history');
-            callHistoryElement.innerHTML = '';
-            
-            // Update active tab
-            const tabs = document.querySelectorAll('.call-filter-tab');
-            tabs.forEach(tab => {
-                tab.classList.remove('active');
-                if (tab.textContent.toLowerCase() === filter || 
-                    (tab.textContent.toLowerCase() === 'all' && filter === 'all')) {
-                    tab.classList.add('active');
+            const callRef = db.collection('calls').doc(currentCallId);
+            await callRef.update({
+                offer: {
+                    type: offer.type,
+                    sdp: offer.sdp
                 }
             });
             
-            // Filter call history
-            let filteredHistory = callHistory;
-            if (filter !== 'all') {
-                filteredHistory = callHistory.filter(call => {
-                    if (filter === 'incoming' && call.direction === 'incoming' && call.status !== 'missed') {
-                        return true;
-                    } else if (filter === 'outgoing' && call.direction === 'outgoing') {
-                        return true;
-                    } else if (filter === 'missed' && call.status === 'missed') {
-                        return true;
+            callRef.onSnapshot(async (snapshot) => {
+                const data = snapshot.data();
+                if (!peerConnection.currentRemoteDescription && data && data.answer) {
+                    const answer = new RTCSessionDescription(data.answer);
+                    await peerConnection.setRemoteDescription(answer);
+                }
+            });
+            
+            callRef.collection('recipientCandidates').onSnapshot(snapshot => {
+                snapshot.docChanges().forEach(async change => {
+                    if (change.type === 'added') {
+                        const candidate = new RTCIceCandidate(change.doc.data());
+                        await peerConnection.addIceCandidate(candidate);
                     }
-                    return false;
                 });
-            }
-            
-            // Display filtered call history
-            if (filteredHistory.length === 0) {
-                callHistoryElement.innerHTML = '<div style="text-align: center; padding: 20px; color: #aaa;">No calls found</div>';
-                return;
-            }
-            
-            filteredHistory.forEach(call => {
-                const otherParty = call.direction === 'outgoing' ? call.recipient : call.caller;
-                
-                // Get user info for the other party
-                db.collection('users').doc(otherParty).get()
-                    .then((doc) => {
-                        let name = 'Unknown';
-                        let iconUrl = 'https://via.placeholder.com/50';
-                        
-                        if (doc.exists) {
-                            const userData = doc.data();
-                            name = userData.username;
-                            iconUrl = userData.iconUrl || iconUrl;
-                        }
-                        
-                        // Create call item
-                        const callItem = document.createElement('div');
-                        callItem.className = 'call-item';
-                        
-                        // Determine call status icon and class
-                        let statusIcon = '';
-                        let statusClass = '';
-                        
-                        if (call.direction === 'outgoing') {
-                            statusIcon = '<i class="fas fa-arrow-up"></i>';
-                            statusClass = 'call-status-outgoing';
-                        } else if (call.direction === 'incoming') {
-                            if (call.status === 'missed') {
-                                statusIcon = '<i class="fas fa-arrow-down"></i>';
-                                statusClass = 'call-status-missed';
-                            } else {
-                                statusIcon = '<i class="fas fa-arrow-down"></i>';
-                                statusClass = 'call-status-incoming';
-                            }
-                        }
-                        
-                        // Format call time
-                        const callTime = call.startTime ? call.startTime.toDate() : new Date();
-                        const formattedTime = formatCallTime(callTime);
-                        
-                        // Format call duration
-                        let durationText = '';
-                        if (call.duration && call.duration > 0) {
-                            const minutes = Math.floor(call.duration / 60).toString().padStart(2, '0');
-                            const seconds = (call.duration % 60).toString().padStart(2, '0');
-                            durationText = `${minutes}:${seconds}`;
-                        } else if (call.status === 'missed' || call.status === 'declined') {
-                            durationText = call.direction === 'outgoing' ? 'Not answered' : 'Missed call';
-                        }
-                        
-                        callItem.innerHTML = `
-                            <img src="${iconUrl}" alt="${name}" class="call-item-pic">
-                            <div class="call-item-info">
-                                <div class="call-item-name">${name}</div>
-                                <div class="call-item-number">${otherParty}</div>
-                                <div class="call-item-status ${statusClass}">${statusIcon} ${durationText}</div>
-                                <div class="call-item-time">${formattedTime}</div>
-                            </div>
-                            <div class="call-item-action" onclick="startCallFromHistory('${otherParty}')">
-                                <i class="fas fa-phone-alt"></i>
-                            </div>
-                        `;
-                        
-                        callHistoryElement.appendChild(callItem);
-                    })
-                    .catch((error) => {
-                        console.error('Error getting user info:', error);
-                    });
             });
         }
         
-        // Filter calls
-        function filterCalls(filter) {
-            displayCallHistory(filter);
+        if (callStatus === 'receiving') {
+            const callRef = db.collection('calls').doc(currentCallId);
+            
+            callRef.onSnapshot(async (snapshot) => {
+                const data = snapshot.data();
+                if (!peerConnection.currentRemoteDescription && data && data.offer) {
+                    const offer = new RTCSessionDescription(data.offer);
+                    await peerConnection.setRemoteDescription(offer);
+                    
+                    const answer = await peerConnection.createAnswer();
+                    await peerConnection.setLocalDescription(answer);
+                    
+                    await callRef.update({
+                        answer: {
+                            type: answer.type,
+                            sdp: answer.sdp
+                        }
+                    });
+                }
+            });
+            
+            callRef.collection('callerCandidates').onSnapshot(snapshot => {
+                snapshot.docChanges().forEach(async change => {
+                    if (change.type === 'added') {
+                        const candidate = new RTCIceCandidate(change.doc.data());
+                        await peerConnection.addIceCandidate(candidate);
+                    }
+                });
+            });
         }
+    } catch (error) {
+        console.error('Error setting up WebRTC:', error);
+        showToast('Error setting up call. Please try again.', 'error');
+        endCall();
+    }
+}
+
+function answerCall() {
+    if (!currentCallId) return;
+    
+    ringtone.pause();
+    ringtone.currentTime = 0;
+    
+    updateCallStatus(currentCallId, 'active');
+    callStatus = 'active';
+    
+    document.getElementById('incoming-call-screen').style.display = 'none';
+    
+    document.getElementById('active-caller-name').textContent = document.getElementById('incoming-caller-name').textContent;
+    document.getElementById('active-caller-number').textContent = document.getElementById('incoming-caller-number').textContent;
+    document.getElementById('active-caller-pic').src = document.getElementById('incoming-caller-pic').src;
+    document.getElementById('call-status-text').textContent = 'On Call';
+    
+    document.getElementById('active-call-screen').style.display = 'flex';
+    
+    startCallTimer();
+    
+    setupWebRTC();
+}
+
+function declineCall() {
+    if (!currentCallId) return;
+    
+    ringtone.pause();
+    ringtone.currentTime = 0;
+    
+    updateCallStatus(currentCallId, 'declined');
+    callStatus = 'idle';
+    currentCallId = null;
+    
+    document.getElementById('incoming-call-screen').style.display = 'none';
+    document.getElementById('call-screen').style.display = 'flex';
+    
+    loadCallHistory();
+}
+
+function endCall() {
+    stopCallTimer();
+    
+    if (callTone) {
+        callTone.pause();
+        callTone.currentTime = 0;
+    }
+    
+    if (currentCallId && (callStatus === 'calling' || callStatus === 'active')) {
+        updateCallStatus(currentCallId, 'ended');
+    }
+    
+    if (peerConnection) {
+        peerConnection.close();
+        peerConnection = null;
+    }
+    
+    if (localStream) {
+        localStream.getTracks().forEach(track => track.stop());
+        localStream = null;
+    }
+    
+    if (activeCallRef) {
+        activeCallRef();
+        activeCallRef = null;
+    }
+    
+    callStatus = 'idle';
+    currentCallId = null;
+    
+    document.getElementById('active-call-screen').style.display = 'none';
+    document.getElementById('call-screen').style.display = 'flex';
+    
+    loadCallHistory();
+}
+
+function toggleMute() {
+    if (localStream) {
+        isMuted = !isMuted;
+        localStream.getAudioTracks().forEach(track => {
+            track.enabled = !isMuted;
+        });
         
-        // Format call time
-        function formatCallTime(time) {
-            const now = new Date();
-            const callTime = new Date(time);
-            
-            if (now.toDateString() === callTime.toDateString()) {
-                // Today
-                return callTime.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
-            } else if (now.getTime() - callTime.getTime() < 86400000 * 7) {
-                // Within a week
-                const days = ['Sunday', 'Monday', 'Tuesday', 'Wednesday', 'Thursday', 'Friday', 'Saturday'];
-                return days[callTime.getDay()];
-            } else {
-                // Older
-                return callTime.toLocaleDateString([], { month: 'short', day: 'numeric' });
-            }
+        const muteIcon = document.getElementById('mute-icon');
+        if (isMuted) {
+            muteIcon.classList.remove('fa-microphone');
+            muteIcon.classList.add('fa-microphone-slash');
+            showToast('Microphone muted', 'warning');
+        } else {
+            muteIcon.classList.remove('fa-microphone-slash');
+            muteIcon.classList.add('fa-microphone');
+            showToast('Microphone unmuted', 'success');
         }
-        
-        // Start call from history
-        function startCallFromHistory(number) {
-            document.getElementById('call-number').value = number;
-            startCall();
-        }
-        
-        // Show toast notification
-        function showToast(message, type = 'info') {
-            const toastContainer = document.getElementById('toast-container');
-            
-            const toast = document.createElement('div');
-            toast.className = `toast toast-${type}`;
-            
-            let icon = '';
-            switch (type) {
-                case 'success':
-                    icon = '<i class="fas fa-check-circle toast-icon"></i>';
-                    break;
-                case 'error':
-                    icon = '<i class="fas fa-exclamation-circle toast-icon"></i>';
-                    break;
-                case 'warning':
-                    icon = '<i class="fas fa-exclamation-triangle toast-icon"></i>';
-                    break;
-                default:
-                    icon = '<i class="fas fa-info-circle toast-icon"></i>';
-            }
-            
-            toast.innerHTML = `
-                ${icon}
-                <div class="toast-message">${message}</div>
-            `;
-            
-            toastContainer.appendChild(toast);
-            
-            // Remove toast after 3 seconds
-            setTimeout(() => {
-                toast.style.opacity = '0';
-                setTimeout(() => {
-                    toastContainer.removeChild(toast);
-                }, 300);
-            }, 3000);
-        }
+    }
+}
+
+function toggleSpeaker() {
+    isSpeakerOn = !isSpeakerOn;
+    
+    const speakerIcon = document.getElementById('speaker-icon');
+    if (isSpeakerOn) {
+        speakerIcon.classList.remove('fa-volume-up');
+        speakerIcon.classList.add('fa-volume-mute');
+        showToast('Speaker off', 'warning');
+    } else {
+        speakerIcon.classList.remove('fa-volume-mute');
+        speakerIcon.classList.add('fa-volume-up');
+        showToast('Speaker on', 'success');
+    }
+}
+
+function startCallTimer() {
+    callDuration = 0;
+    callTimer = setInterval(() => {
+        callDuration++;
+        const minutes = Math.floor(callDuration / 60).toString().padStart(2, '0');
+        const seconds = (callDuration % 60).toString().padStart(2, '0');
+        document.getElementById('call-timer').textContent = `${minutes}:${seconds}`;
+    }, 1000);
+}
+
+function stopCallTimer() {
+    if (callTimer) {
+        clearInterval(callTimer);
+        callTimer = null;
+    }
+}
+
+function formatCallTime(time) {
+    const now = new Date();
+    const callTime = new Date(time);
+    
+    if (now.toDateString() === callTime.toDateString()) {
+        return callTime.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
+    } else if (now.getTime() - callTime.getTime() < 86400000 * 7) {
+        const days = ['Sunday', 'Monday', 'Tuesday', 'Wednesday', 'Thursday', 'Friday', 'Saturday'];
+        return days[callTime.getDay()];
+    } else {
+        return callTime.toLocaleDateString([], { month: 'short', day: 'numeric' });
+    }
+}
+
+function startCallFromHistory(number) {
+    document.getElementById('call-number').value = number;
+    startCall();
+}
+
+function showToast(message, type = 'info') {
+    const toastContainer = document.getElementById('toast-container');
+    
+    const toast = document.createElement('div');
+    toast.className = `toast toast-${type}`;
+    
+    let icon = '';
+    switch (type) {
+        case 'success':
+            icon = '<i class="fas fa-check-circle toast-icon"></i>';
+            break;
+        case 'error':
+            icon = '<i class="fas fa-exclamation-circle toast-icon"></i>';
+            break;
+        case 'warning':
+            icon = '<i class="fas fa-exclamation-triangle toast-icon"></i>';
+            break;
+        default:
+            icon = '<i class="fas fa-info-circle toast-icon"></i>';
+    }
+    
+    toast.innerHTML = `
+        ${icon}
+        <div class="toast-message">${message}</div>
+    `;
+    
+    toastContainer.appendChild(toast);
+    
+    setTimeout(() => {
+        toast.style.opacity = '0';
+        setTimeout(() => {
+            toastContainer.removeChild(toast);
+        }, 300);
+    }, 3000);
+}
     </script>
 </body>
 </html>
