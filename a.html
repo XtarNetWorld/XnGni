@@ -1,0 +1,180 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>P2P Voice Call (WebRTC)</title>
+    <style>
+        body {
+            font-family: Arial, sans-serif;
+            max-width: 600px;
+            margin: 0 auto;
+            padding: 20px;
+            text-align: center;
+        }
+        button {
+            background: #007BFF;
+            color: white;
+            border: none;
+            padding: 10px 20px;
+            margin: 5px;
+            border-radius: 5px;
+            cursor: pointer;
+        }
+        button:disabled {
+            background: #cccccc;
+        }
+        #localId, #remoteId {
+            width: 100%;
+            padding: 10px;
+            margin: 10px 0;
+        }
+        #status {
+            font-weight: bold;
+            margin: 20px 0;
+        }
+        #audioContainer {
+            margin-top: 20px;
+        }
+    </style>
+</head>
+<body>
+    <h1>P2P Voice Call (WebRTC)</h1>
+    <p>Test direct device-to-device voice chat without a server!</p>
+
+    <div>
+        <h3>Your ID:</h3>
+        <input type="text" id="localId" readonly>
+        <button id="copyId">Copy ID</button>
+        <button id="generateId">Generate New ID</button>
+    </div>
+
+    <div>
+        <h3>Enter Remote ID:</h3>
+        <input type="text" id="remoteId" placeholder="Paste other device's ID">
+        <button id="startCall">Start Call</button>
+        <button id="endCall" disabled>End Call</button>
+    </div>
+
+    <div id="status">Status: Ready</div>
+    <div id="audioContainer"></div>
+
+    <script>
+        // Generate a random ID for this device
+        let localId = Math.random().toString(36).substring(2, 10);
+        document.getElementById('localId').value = localId;
+
+        // WebRTC variables
+        let peerConnection;
+        let localStream;
+        const configuration = {
+            iceServers: [{ urls: "stun:stun.l.google.com:19302" }] // Free Google STUN server
+        };
+
+        // DOM elements
+        const generateIdBtn = document.getElementById('generateId');
+        const copyIdBtn = document.getElementById('copyId');
+        const startCallBtn = document.getElementById('startCall');
+        const endCallBtn = document.getElementById('endCall');
+        const remoteIdInput = document.getElementById('remoteId');
+        const statusDiv = document.getElementById('status');
+        const audioContainer = document.getElementById('audioContainer');
+
+        // Generate a new random ID
+        generateIdBtn.addEventListener('click', () => {
+            localId = Math.random().toString(36).substring(2, 10);
+            document.getElementById('localId').value = localId;
+        });
+
+        // Copy ID to clipboard
+        copyIdBtn.addEventListener('click', () => {
+            navigator.clipboard.writeText(localId);
+            statusDiv.textContent = "Status: ID Copied!";
+            setTimeout(() => statusDiv.textContent = "Status: Ready", 2000);
+        });
+
+        // Start the call
+        startCallBtn.addEventListener('click', async () => {
+            const remoteId = remoteIdInput.value.trim();
+            if (!remoteId) {
+                statusDiv.textContent = "Status: Enter Remote ID!";
+                return;
+            }
+
+            statusDiv.textContent = "Status: Starting call...";
+            startCallBtn.disabled = true;
+            endCallBtn.disabled = false;
+
+            try {
+                // Get microphone access
+                localStream = await navigator.mediaDevices.getUserMedia({ audio: true });
+                
+                // Create peer connection
+                peerConnection = new RTCPeerConnection(configuration);
+                
+                // Add local stream to connection
+                localStream.getTracks().forEach(track => {
+                    peerConnection.addTrack(track, localStream);
+                });
+
+                // Listen for remote stream
+                peerConnection.ontrack = (event) => {
+                    const remoteAudio = document.createElement('audio');
+                    remoteAudio.srcObject = event.streams[0];
+                    remoteAudio.autoplay = true;
+                    audioContainer.innerHTML = '';
+                    audioContainer.appendChild(remoteAudio);
+                    statusDiv.textContent = "Status: Call Connected!";
+                };
+
+                // ICE candidate exchange (simulated via page since we have no signaling server)
+                peerConnection.onicecandidate = (event) => {
+                    if (event.candidate) {
+                        // In a real app, send this to the other peer via a signaling server
+                        // Here, we simulate it by manually copying (for demo purposes)
+                        console.log("ICE Candidate:", JSON.stringify(event.candidate));
+                    }
+                };
+
+                // Create offer
+                const offer = await peerConnection.createOffer();
+                await peerConnection.setLocalDescription(offer);
+
+                // Simulate signaling (manually copy/paste in real-world test)
+                const offerString = JSON.stringify(offer);
+                console.log("Offer:", offerString);
+                alert(`Copy this Offer SDP to the other device:\n\n${offerString}`);
+
+                // Simulate receiving an answer (prompt user to paste)
+                const answerString = prompt("Paste the Answer SDP from the other device:");
+                if (answerString) {
+                    await peerConnection.setRemoteDescription(JSON.parse(answerString));
+                    statusDiv.textContent = "Status: Call Connected!";
+                }
+
+            } catch (error) {
+                console.error("Call failed:", error);
+                statusDiv.textContent = `Status: Error - ${error.message}`;
+                startCallBtn.disabled = false;
+                endCallBtn.disabled = true;
+            }
+        });
+
+        // End the call
+        endCallBtn.addEventListener('click', () => {
+            if (peerConnection) {
+                peerConnection.close();
+                peerConnection = null;
+            }
+            if (localStream) {
+                localStream.getTracks().forEach(track => track.stop());
+                localStream = null;
+            }
+            audioContainer.innerHTML = '';
+            statusDiv.textContent = "Status: Call Ended";
+            startCallBtn.disabled = false;
+            endCallBtn.disabled = true;
+        });
+    </script>
+</body>
+</html>
