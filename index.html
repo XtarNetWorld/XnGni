@@ -974,7 +974,7 @@
 <body>
     <!-- Splash Screen -->
     <div id="splash-screen">
-        <h1 class="logo-text">XnDev</h1>
+        <h1 class="logo-text">XtarNet</h1>
         <div class="info-icon" onclick="showOwnerInfo()">
             <i class="fas fa-info"></i>
         </div>
@@ -1235,8 +1235,9 @@ function login() {
     // Sign in anonymously
     auth.signInAnonymously()
         .then((userCredential) => {
+            console.log('Authenticated user:', auth.currentUser);
             const uid = userCredential.user.uid;
-            const defaultIconUrl = 'https://via.placeholder.com/40';
+            const defaultIconUrl = 'https://placehold.co/40x40';
             const userIconPreview = document.getElementById('user-icon-preview').querySelector('img');
             const userIconUrl = userIconPreview ? userIconPreview.src : defaultIconUrl;
             
@@ -1254,7 +1255,7 @@ function login() {
                 uid: auth.currentUser.uid,
                 username: username,
                 mobile: mobile,
-                iconUrl: document.getElementById('user-icon-preview').querySelector('img')?.src || 'https://via.placeholder.com/40'
+                iconUrl: document.getElementById('user-icon-preview').querySelector('img')?.src || 'https://placehold.co/40x40'
             };
             
             // Update user profile in header
@@ -1285,12 +1286,12 @@ function login() {
         });
 }
 
-// Updated listenForIncomingCalls
+// Listen for incoming calls
 function listenForIncomingCalls() {
     if (!currentUser) return;
     
     db.collection('calls')
-        .where('recipient', '==', currentUser.mobile)
+        .where('recipient', '==', currentUser.uid)
         .where('status', '==', 'calling')
         .onSnapshot((snapshot) => {
             snapshot.docChanges().forEach((change) => {
@@ -1302,7 +1303,7 @@ function listenForIncomingCalls() {
         });
 }
 
-// Updated handleIncomingCall
+// Handle incoming call
 function handleIncomingCall(callId, callData) {
     if (callStatus !== 'idle') {
         updateCallStatus(callId, 'missed');
@@ -1312,16 +1313,16 @@ function handleIncomingCall(callId, callData) {
     currentCallId = callId;
     callStatus = 'receiving';
     
-    db.collection('users').where('mobile', '==', callData.caller).get()
-        .then((querySnapshot) => {
-            let callerData = { username: 'Unknown Caller', mobile: callData.caller, iconUrl: 'https://via.placeholder.com/120' };
-            if (!querySnapshot.empty) {
-                callerData = querySnapshot.docs[0].data();
+    db.collection('users').doc(callData.caller).get()
+        .then((doc) => {
+            let callerData = { username: 'Unknown Caller', mobile: callData.caller, iconUrl: 'https://placehold.co/120x120' };
+            if (doc.exists) {
+                callerData = doc.data();
             }
             
             document.getElementById('incoming-caller-name').textContent = callerData.username;
             document.getElementById('incoming-caller-number').textContent = callerData.mobile;
-            document.getElementById('incoming-caller-pic').src = callerData.iconUrl || 'https://via.placeholder.com/120';
+            document.getElementById('incoming-caller-pic').src = callerData.iconUrl || 'https://placehold.co/120x120';
             
             document.getElementById('call-screen').style.display = 'none';
             document.getElementById('incoming-call-screen').style.display = 'flex';
@@ -1334,9 +1335,19 @@ function handleIncomingCall(callId, callData) {
         });
 }
 
-// Updated startCall
+// Show new call modal
+function showNewCallModal() {
+    document.getElementById('new-call-modal').style.display = 'flex';
+}
+
+// Hide new call modal
+function hideNewCallModal() {
+    document.getElementById('new-call-modal').style.display = 'none';
+}
+
+// Start call
 function startCall() {
-    const callNumber = document.getElementById('call-number').value;
+    const callNumber = document.getElementById('call-number').value.trim();
     
     if (!callNumber) {
         showToast('Please enter a phone number to call', 'error');
@@ -1353,14 +1364,16 @@ function startCall() {
         return;
     }
     
+    // Find recipient's uid by mobile number
     db.collection('users').where('mobile', '==', callNumber).get()
         .then((querySnapshot) => {
             if (!querySnapshot.empty) {
                 const recipientData = querySnapshot.docs[0].data();
+                const recipientUid = querySnapshot.docs[0].id;
                 
                 db.collection('calls').add({
-                    caller: currentUser.mobile,
-                    recipient: callNumber,
+                    caller: currentUser.uid,
+                    recipient: recipientUid,
                     startTime: firebase.firestore.FieldValue.serverTimestamp(),
                     status: 'calling',
                     duration: 0
@@ -1373,7 +1386,7 @@ function startCall() {
                     
                     document.getElementById('active-caller-name').textContent = recipientData.username;
                     document.getElementById('active-caller-number').textContent = recipientData.mobile;
-                    document.getElementById('active-caller-pic').src = recipientData.iconUrl || 'https://via.placeholder.com/120';
+                    document.getElementById('active-caller-pic').src = recipientData.iconUrl || 'https://placehold.co/120x120';
                     document.getElementById('call-status-text').textContent = 'Calling...';
                     
                     document.getElementById('call-screen').style.display = 'none';
@@ -1406,159 +1419,7 @@ function startCall() {
         });
 }
 
-// Updated loadCallHistory
-function loadCallHistory() {
-    if (!currentUser) return;
-    
-    callHistory = [];
-    const callHistoryElement = document.getElementById('call-history');
-    callHistoryElement.innerHTML = '';
-    
-    db.collection('calls')
-        .where('caller', '==', currentUser.mobile)
-        .get()
-        .then((querySnapshot) => {
-            querySnapshot.forEach((doc) => {
-                const callData = doc.data();
-                callData.id = doc.id;
-                callData.direction = 'outgoing';
-                callHistory.push(callData);
-            });
-            
-            return db.collection('calls')
-                .where('recipient', '==', currentUser.mobile)
-                .get();
-        })
-        .then((querySnapshot) => {
-            querySnapshot.forEach((doc) => {
-                const callData = doc.data();
-                callData.id = doc.id;
-                callData.direction = 'incoming';
-                callHistory.push(callData);
-            });
-            
-            callHistory.sort((a, b) => {
-                const timeA = a.startTime ? a.startTime.toDate() : new Date(0);
-                const timeB = b.startTime ? b.startTime.toDate() : new Date(0);
-                return timeB - timeA;
-            });
-            
-            displayCallHistory('all');
-        })
-        .catch((error) => {
-            console.error('Error loading call history:', error);
-            showToast('Failed to load call history', 'error');
-        });
-}
-
-// Updated displayCallHistory
-function displayCallHistory(filter) {
-    const callHistoryElement = document.getElementById('call-history');
-    callHistoryElement.innerHTML = '';
-    
-    const tabs = document.querySelectorAll('.call-filter-tab');
-    tabs.forEach(tab => {
-        tab.classList.remove('active');
-        if (tab.textContent.toLowerCase() === filter || 
-            (tab.textContent.toLowerCase() === 'all' && filter === 'all')) {
-            tab.classList.add('active');
-        }
-    });
-    
-    let filteredHistory = callHistory;
-    if (filter !== 'all') {
-        filteredHistory = callHistory.filter(call => {
-            if (filter === 'incoming' && call.direction === 'incoming' && call.status !== 'missed') {
-                return true;
-            } else if (filter === 'outgoing' && call.direction === 'outgoing') {
-                return true;
-            } else if (filter === 'missed' && call.status === 'missed') {
-                return true;
-            }
-            return false;
-        });
-    }
-    
-    if (filteredHistory.length === 0) {
-        callHistoryElement.innerHTML = '<div style="text-align: center; padding: 20px; color: #aaa;">No calls found</div>';
-        return;
-    }
-    
-    filteredHistory.forEach(call => {
-        const otherParty = call.direction === 'outgoing' ? call.recipient : call.caller;
-        
-        db.collection('users').where('mobile', '==', otherParty).get()
-            .then((querySnapshot) => {
-                let name = 'Unknown';
-                let iconUrl = 'https://via.placeholder.com/50';
-                
-                if (!querySnapshot.empty) {
-                    const userData = querySnapshot.docs[0].data();
-                    name = userData.username;
-                    iconUrl = userData.iconUrl || iconUrl;
-                }
-                
-                const callItem = document.createElement('div');
-                callItem.className = 'call-item';
-                
-                let statusIcon = '';
-                let statusClass = '';
-                
-                if (call.direction === 'outgoing') {
-                    statusIcon = '<i class="fas fa-arrow-up"></i>';
-                    statusClass = 'call-status-outgoing';
-                } else if (call.direction === 'incoming') {
-                    if (call.status === 'missed') {
-                        statusIcon = '<i class="fas fa-arrow-down"></i>';
-                        statusClass = 'call-status-missed';
-                    } else {
-                        statusIcon = '<i class="fas fa-arrow-down"></i>';
-                        statusClass = 'call-status-incoming';
-                    }
-                }
-                
-                const callTime = call.startTime ? call.startTime.toDate() : new Date();
-                const formattedTime = formatCallTime(callTime);
-                
-                let durationText = '';
-                if (call.duration && call.duration > 0) {
-                    const minutes = Math.floor(call.duration / 60).toString().padStart(2, '0');
-                    const seconds = (call.duration % 60).toString().padStart(2, '0');
-                    durationText = `${minutes}:${seconds}`;
-                } else if (call.status === 'missed' || call.status === 'declined') {
-                    durationText = call.direction === 'outgoing' ? 'Not answered' : 'Missed call';
-                }
-                
-                callItem.innerHTML = `
-                    <img src="${iconUrl}" alt="${name}" class="call-item-pic">
-                    <div class="call-item-info">
-                        <div class="call-item-name">${name}</div>
-                        <div class="call-item-number">${otherParty}</div>
-                        <div class="call-item-status ${statusClass}">${statusIcon} ${durationText}</div>
-                        <div class="call-item-time">${formattedTime}</div>
-                    </div>
-                    <div class="call-item-action" onclick="startCallFromHistory('${otherParty}')">
-                        <i class="fas fa-phone-alt"></i>
-                    </div>
-                `;
-                
-                callHistoryElement.appendChild(callItem);
-            })
-            .catch((error) => {
-                console.error('Error getting user info:', error);
-            });
-    });
-}
-
-// Remaining functions (unchanged)
-function showNewCallModal() {
-    document.getElementById('new-call-modal').style.display = 'flex';
-}
-
-function hideNewCallModal() {
-    document.getElementById('new-call-modal').style.display = 'none';
-}
-
+// Listen for call status changes
 function listenForCallStatusChanges(callId) {
     activeCallRef = db.collection('calls').doc(callId).onSnapshot((doc) => {
         if (doc.exists) {
@@ -1579,6 +1440,7 @@ function listenForCallStatusChanges(callId) {
     });
 }
 
+// Update call status
 function updateCallStatus(callId, status) {
     if (!callId) return;
     
@@ -1599,6 +1461,7 @@ function updateCallStatus(callId, status) {
         });
 }
 
+// Setup WebRTC
 async function setupWebRTC() {
     try {
         localStream = await navigator.mediaDevices.getUserMedia({ audio: true });
@@ -1703,6 +1566,7 @@ async function setupWebRTC() {
     }
 }
 
+// Answer call
 function answerCall() {
     if (!currentCallId) return;
     
@@ -1726,6 +1590,7 @@ function answerCall() {
     setupWebRTC();
 }
 
+// Decline call
 function declineCall() {
     if (!currentCallId) return;
     
@@ -1742,6 +1607,7 @@ function declineCall() {
     loadCallHistory();
 }
 
+// End call
 function endCall() {
     stopCallTimer();
     
@@ -1778,6 +1644,7 @@ function endCall() {
     loadCallHistory();
 }
 
+// Toggle mute
 function toggleMute() {
     if (localStream) {
         isMuted = !isMuted;
@@ -1798,6 +1665,7 @@ function toggleMute() {
     }
 }
 
+// Toggle speaker
 function toggleSpeaker() {
     isSpeakerOn = !isSpeakerOn;
     
@@ -1813,6 +1681,7 @@ function toggleSpeaker() {
     }
 }
 
+// Start call timer
 function startCallTimer() {
     callDuration = 0;
     callTimer = setInterval(() => {
@@ -1823,6 +1692,7 @@ function startCallTimer() {
     }, 1000);
 }
 
+// Stop call timer
 function stopCallTimer() {
     if (callTimer) {
         clearInterval(callTimer);
@@ -1830,6 +1700,153 @@ function stopCallTimer() {
     }
 }
 
+// Load call history
+function loadCallHistory() {
+    if (!currentUser) return;
+    
+    callHistory = [];
+    const callHistoryElement = document.getElementById('call-history');
+    callHistoryElement.innerHTML = '';
+    
+    db.collection('calls')
+        .where('caller', '==', currentUser.uid)
+        .get()
+        .then((querySnapshot) => {
+            querySnapshot.forEach((doc) => {
+                const callData = doc.data();
+                callData.id = doc.id;
+                callData.direction = 'outgoing';
+                callHistory.push(callData);
+            });
+            
+            return db.collection('calls')
+                .where('recipient', '==', currentUser.uid)
+                .get();
+        })
+        .then((querySnapshot) => {
+            querySnapshot.forEach((doc) => {
+                const callData = doc.data();
+                callData.id = doc.id;
+                callData.direction = 'incoming';
+                callHistory.push(callData);
+            });
+            
+            callHistory.sort((a, b) => {
+                const timeA = a.startTime ? a.startTime.toDate() : new Date(0);
+                const timeB = b.startTime ? b.startTime.toDate() : new Date(0);
+                return timeB - timeA;
+            });
+            
+            displayCallHistory('all');
+        })
+        .catch((error) => {
+            console.error('Error loading call history:', error);
+            showToast('Failed to load call history', 'error');
+        });
+}
+
+// Display call history
+function displayCallHistory(filter) {
+    const callHistoryElement = document.getElementById('call-history');
+    callHistoryElement.innerHTML = '';
+    
+    const tabs = document.querySelectorAll('.call-filter-tab');
+    tabs.forEach(tab => {
+        tab.classList.remove('active');
+        if (tab.textContent.toLowerCase() === filter || 
+            (tab.textContent.toLowerCase() === 'all' && filter === 'all')) {
+            tab.classList.add('active');
+        }
+    });
+    
+    let filteredHistory = callHistory;
+    if (filter !== 'all') {
+        filteredHistory = callHistory.filter(call => {
+            if (filter === 'incoming' && call.direction === 'incoming' && call.status !== 'missed') {
+                return true;
+            } else if (filter === 'outgoing' && call.direction === 'outgoing') {
+                return true;
+            } else if (filter === 'missed' && call.status === 'missed') {
+                return true;
+            }
+            return false;
+        });
+    }
+    
+    if (filteredHistory.length === 0) {
+        callHistoryElement.innerHTML = '<div style="text-align: center; padding: 20px; color: #aaa;">No calls found</div>';
+        return;
+    }
+    
+    filteredHistory.forEach(call => {
+        const otherParty = call.direction === 'outgoing' ? call.recipient : call.caller;
+        
+        db.collection('users').doc(otherParty).get()
+            .then((doc) => {
+                let name = 'Unknown';
+                let iconUrl = 'https://placehold.co/50x50';
+                let mobile = otherParty;
+                
+                if (doc.exists) {
+                    const userData = doc.data();
+                    name = userData.username;
+                    iconUrl = userData.iconUrl || iconUrl;
+                    mobile = userData.mobile;
+                }
+                
+                const callItem = document.createElement('div');
+                callItem.className = 'call-item';
+                
+                let statusIcon = '';
+                let statusClass = '';
+                
+                if (call.direction === 'outgoing') {
+                    statusIcon = '<i class="fas fa-arrow-up"></i>';
+                    statusClass = 'call-status-outgoing';
+                } else if (call.direction === 'incoming') {
+                    if (call.status === 'missed') {
+                        statusIcon = '<i class="fas fa-arrow-down"></i>';
+                        statusClass = 'call-status-missed';
+                    } else {
+                        statusIcon = '<i class="fas fa-arrow-down"></i>';
+                        statusClass = 'call-status-incoming';
+                    }
+                }
+                
+                const callTime = call.startTime ? call.startTime.toDate() : new Date();
+                const formattedTime = formatCallTime(callTime);
+                
+                let durationText = '';
+                if (call.duration && call.duration > 0) {
+                    const minutes = Math.floor(call.duration / 60).toString().padStart(2, '0');
+                    const seconds = (call.duration % 60).toString().padStart(2, '0');
+                    durationText = `${minutes}:${seconds}`;
+                } else if (call.status === 'missed' || call.status === 'declined') {
+                    durationText = call.direction === 'outgoing' ? 'Not answered' : 'Missed call';
+                }
+                
+                callItem.innerHTML = `
+                    <img src="${iconUrl}" alt="${name}" class="call-item-pic">
+                    <div class="call-item-info">
+                        <div class="call-item-name">${name}</div>
+                        <div class="call-item-number">${mobile}</div>
+                        <div class="call-item-status ${statusClass}">${statusIcon} ${durationText}</div>
+                        <div class="call-item-time">${formattedTime}</div>
+                    </div>
+                    <div class="call-item-action" onclick="startCallFromHistory('${mobile}')">
+                        <i class="fas fa-phone-alt"></i>
+                    </div>
+                `;
+                
+                callHistoryElement.appendChild(callItem);
+            })
+            .catch((error) => {
+                console.error('Error getting user info:', error);
+            });
+    });
+}
+
+// Format call time
 function formatCallTime(time) {
     const now = new Date();
     const callTime = new Date(time);
@@ -1844,11 +1861,13 @@ function formatCallTime(time) {
     }
 }
 
-function startCallFromHistory(number) {
-    document.getElementById('call-number').value = number;
+// Start call from history
+function startCallFromHistory(mobile) {
+    document.getElementById('call-number').value = mobile;
     startCall();
 }
 
+// Show toast
 function showToast(message, type = 'info') {
     const toastContainer = document.getElementById('toast-container');
     
