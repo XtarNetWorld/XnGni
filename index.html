@@ -1162,13 +1162,28 @@ let ringtone = null;
 let callTone = null;
 let localStream = null;
 let peerConnection = null;
+let remoteAudio = null;
+let signalingListeners = {};
 
-// WebRTC configuration
+// WebRTC configuration with enhanced ICE servers
 const configuration = {
     iceServers: [
         { urls: 'stun:stun.l.google.com:19302' },
-        { urls: 'stun:stun1.l.google.com:19302' }
+        { urls: 'stun:stun1.l.google.com:19302' },
+        { urls: 'stun:stun2.l.google.com:19302' },
+        { urls: 'stun:stun3.l.google.com:19302' },
+        { urls: 'stun:stun4.l.google.com:19302' }
     ]
+};
+
+// Enhanced audio constraints
+const audioConstraints = {
+    audio: {
+        echoCancellation: true,
+        noiseSuppression: true,
+        autoGainControl: true,
+        sampleRate: 48000
+    }
 };
 
 // Show splash screen for 3 seconds then show login screen
@@ -1387,6 +1402,10 @@ function startCall() {
                     currentCallId = docRef.id;
                     callStatus = 'calling';
                     
+                    // Initialize RTDB signaling path
+                    const rtdbCallRef = rtdb.ref(`calls/${currentCallId}`);
+                    rtdbCallRef.set({}); // Create the path
+                    
                     hideNewCallModal();
                     
                     document.getElementById('active-caller-name').textContent = recipientData.username;
@@ -1401,7 +1420,7 @@ function startCall() {
                     
                     listenForCallStatusChanges(docRef.id);
                     
-                    setupWebRTC(true); // true for caller
+                    setupWebRTC(true, rtdbCallRef); // true for caller, pass rtdb ref
                     
                     setTimeout(() => {
                         if (callStatus === 'calling') {
@@ -1427,7 +1446,7 @@ function startCall() {
 // Listen for call status changes
 function listenForCallStatusChanges(callId) {
     if (activeCallRef) {
-        activeCallRef(); // Unsubscribe previous if any
+        activeCallRef();
     }
     activeCallRef = db.collection('calls').doc(callId).onSnapshot((doc) => {
         if (doc.exists) {
@@ -1477,10 +1496,10 @@ function updateCallStatus(callId, status) {
         });
 }
 
-// Setup WebRTC
-async function setupWebRTC(isCaller) {
+// Setup WebRTC with RTDB signaling
+async function setupWebRTC(isCaller, rtdbCallRef) {
     try {
-        localStream = await navigator.mediaDevices.getUserMedia({ audio: true });
+        localStream = await navigator.mediaDevices.getUserMedia(audioConstraints);
         
         peerConnection = new RTCPeerConnection(configuration);
         
@@ -1488,87 +1507,96 @@ async function setupWebRTC(isCaller) {
             peerConnection.addTrack(track, localStream);
         });
         
+        // Global remote audio setup
+        if (!remoteAudio) {
+            remoteAudio = new Audio();
+            remoteAudio.muted = false;
+            remoteAudio.volume = 1.0;
+        }
+        
         peerConnection.onicecandidate = event => {
-            if (event.candidate && currentCallId) {
-                const callRef = db.collection('calls').doc(currentCallId);
-                
-                if (isCaller) {
-                    callRef.collection('callerCandidates').add(event.candidate.toJSON());
-                } else {
-                    callRef.collection('recipientCandidates').add(event.candidate.toJSON());
-                }
+            if (event.candidate) {
+                const candidateObj = event.candidate.toJSON();
+                const candidatesRef = isCaller ? rtdbCallRef.child('callerCandidates') : rtdbCallRef.child('recipientCandidates');
+                candidatesRef.push(candidateObj);
             }
         };
         
         peerConnection.ontrack = event => {
-            const remoteStream = new MediaStream();
-            event.streams[0].getTracks().forEach(track => {
-                remoteStream.addTrack(track);
-            });
-            
-            const remoteAudio = new Audio();
+            const remoteStream = event.streams[0];
             remoteAudio.srcObject = remoteStream;
-            remoteAudio.autoplay = true;
-            remoteAudio.play().catch(e => console.log('Error playing remote audio:', e));
+            remoteAudio.play().catch(e => {
+                console.error('Error playing remote audio:', e);
+                // Retry play after a short delay
+                setTimeout(() => remoteAudio.play().catch(console.error), 100);
+            });
+            console.log('Remote stream received and playing');
         };
         
-        const callRef = db.collection('calls').doc(currentCallId);
+        peerConnection.onconnectionstatechange = () => {
+            console.log('Connection state:', peerConnection.connectionState);
+            if (peerConnection.connectionState === 'failed') {
+                endCall();
+                showToast('Connection failed. Retrying...', 'error');
+            }
+        };
+        
+        // Setup candidate listeners
+        const candidatesRef = isCaller ? rtdbCallRef.child('recipientCandidates') : rtdbCallRef.child('callerCandidates');
+        const candidateListener = candidatesRef.on('child_added', async (snap) => {
+            const candidate = snap.val();
+            if (candidate) {
+                try {
+                    await peerConnection.addIceCandidate(new RTCIceCandidate(candidate));
+                } catch (e) {
+                    console.error('Error adding ICE candidate:', e);
+                }
+            }
+        });
+        signalingListeners.candidates = candidateListener;
         
         if (isCaller) {
+            // Caller creates offer
             const offer = await peerConnection.createOffer();
             await peerConnection.setLocalDescription(offer);
             
-            await callRef.update({
-                offer: {
-                    type: offer.type,
-                    sdp: offer.sdp
-                }
+            rtdbCallRef.child('offer').set({
+                type: offer.type,
+                sdp: offer.sdp
             });
             
-            callRef.onSnapshot(async (snapshot) => {
-                const data = snapshot.data();
-                if (!peerConnection.currentRemoteDescription && data && data.answer) {
-                    const answer = new RTCSessionDescription(data.answer);
+            // Listen for answer
+            const answerListener = rtdbCallRef.child('answer').on('value', async (snap) => {
+                const answerData = snap.val();
+                if (answerData && !peerConnection.currentRemoteDescription) {
+                    const answer = new RTCSessionDescription(answerData);
                     await peerConnection.setRemoteDescription(answer);
+                    console.log('Answer set as remote description');
                 }
             });
-            
-            callRef.collection('recipientCandidates').onSnapshot(snapshot => {
-                snapshot.docChanges().forEach(async change => {
-                    if (change.type === 'added') {
-                        const candidate = new RTCIceCandidate(change.doc.data());
-                        await peerConnection.addIceCandidate(candidate);
-                    }
-                });
-            });
+            signalingListeners.answer = answerListener;
         } else {
-            callRef.onSnapshot(async (snapshot) => {
-                const data = snapshot.data();
-                if (!peerConnection.currentRemoteDescription && data && data.offer) {
-                    const offer = new RTCSessionDescription(data.offer);
+            // Recipient listens for offer
+            const offerListener = rtdbCallRef.child('offer').on('value', async (snap) => {
+                const offerData = snap.val();
+                if (offerData && !peerConnection.currentRemoteDescription) {
+                    const offer = new RTCSessionDescription(offerData);
                     await peerConnection.setRemoteDescription(offer);
                     
                     const answer = await peerConnection.createAnswer();
                     await peerConnection.setLocalDescription(answer);
                     
-                    await callRef.update({
-                        answer: {
-                            type: answer.type,
-                            sdp: answer.sdp
-                        }
+                    rtdbCallRef.child('answer').set({
+                        type: answer.type,
+                        sdp: answer.sdp
                     });
+                    console.log('Offer set and answer sent');
                 }
             });
-            
-            callRef.collection('callerCandidates').onSnapshot(snapshot => {
-                snapshot.docChanges().forEach(async change => {
-                    if (change.type === 'added') {
-                        const candidate = new RTCIceCandidate(change.doc.data());
-                        await peerConnection.addIceCandidate(candidate);
-                    }
-                });
-            });
+            signalingListeners.offer = offerListener;
         }
+        
+        console.log('WebRTC setup completed for', isCaller ? 'caller' : 'recipient');
     } catch (error) {
         console.error('Error setting up WebRTC:', error);
         showToast('Error setting up call. Please try again.', 'error');
@@ -1582,6 +1610,10 @@ function answerCall() {
     
     ringtone.pause();
     ringtone.currentTime = 0;
+    
+    // Initialize RTDB signaling path for recipient
+    const rtdbCallRef = rtdb.ref(`calls/${currentCallId}`);
+    rtdbCallRef.set({}); // Ensure path exists
     
     updateCallStatus(currentCallId, 'active');
     callStatus = 'active';
@@ -1597,7 +1629,7 @@ function answerCall() {
     
     startCallTimer();
     
-    setupWebRTC(false); // false for recipient
+    setupWebRTC(false, rtdbCallRef); // false for recipient
     
     listenForCallStatusChanges(currentCallId);
 }
@@ -1633,8 +1665,17 @@ function endCall() {
         ringtone.currentTime = 0;
     }
     
+    if (remoteAudio) {
+        remoteAudio.pause();
+        remoteAudio.srcObject = null;
+    }
+    
     if (currentCallId && (callStatus === 'calling' || callStatus === 'active' || callStatus === 'receiving')) {
         updateCallStatus(currentCallId, 'ended');
+        
+        // Clean up RTDB signaling
+        const rtdbCallRef = rtdb.ref(`calls/${currentCallId}`);
+        rtdbCallRef.remove();
     }
     
     if (peerConnection) {
@@ -1647,6 +1688,14 @@ function endCall() {
         localStream = null;
     }
     
+    // Unsubscribe all signaling listeners
+    Object.values(signalingListeners).forEach(listener => {
+        if (listener && typeof listener === 'function') {
+            listener();
+        }
+    });
+    signalingListeners = {};
+    
     if (activeCallRef) {
         activeCallRef();
         activeCallRef = null;
@@ -1654,6 +1703,7 @@ function endCall() {
     
     callStatus = 'idle';
     currentCallId = null;
+    remoteAudio = null;
     
     document.getElementById('active-call-screen').style.display = 'none';
     document.getElementById('incoming-call-screen').style.display = 'none';
@@ -1692,12 +1742,13 @@ function toggleSpeaker() {
         speakerIcon.classList.remove('fa-volume-up');
         speakerIcon.classList.add('fa-volume-mute');
         showToast('Speaker off', 'warning');
+        if (remoteAudio) remoteAudio.volume = 0.5; // Lower volume for earpiece simulation
     } else {
         speakerIcon.classList.remove('fa-volume-mute');
         speakerIcon.classList.add('fa-volume-up');
         showToast('Speaker on', 'success');
+        if (remoteAudio) remoteAudio.volume = 1.0;
     }
-    // Note: setSinkId requires deviceId, not implemented here
 }
 
 // Start call timer
