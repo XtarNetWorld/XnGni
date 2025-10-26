@@ -1160,6 +1160,8 @@ let callStatus = 'idle';
 let activeCallRef = null;
 let ringtone = null;
 let callTone = null;
+let localStream = null;
+let peerConnection = null;
 
 // WebRTC configuration
 const configuration = {
@@ -1328,6 +1330,9 @@ function handleIncomingCall(callId, callData) {
             document.getElementById('incoming-call-screen').style.display = 'flex';
             
             ringtone.play().catch(e => console.log('Error playing ringtone:', e));
+            
+            // Listen for status changes even during ringing, in case caller cancels
+            listenForCallStatusChanges(callId);
         })
         .catch((error) => {
             console.error('Error getting caller info:', error);
@@ -1396,7 +1401,7 @@ function startCall() {
                     
                     listenForCallStatusChanges(docRef.id);
                     
-                    setupWebRTC();
+                    setupWebRTC(true); // true for caller
                     
                     setTimeout(() => {
                         if (callStatus === 'calling') {
@@ -1421,6 +1426,9 @@ function startCall() {
 
 // Listen for call status changes
 function listenForCallStatusChanges(callId) {
+    if (activeCallRef) {
+        activeCallRef(); // Unsubscribe previous if any
+    }
     activeCallRef = db.collection('calls').doc(callId).onSnapshot((doc) => {
         if (doc.exists) {
             const callData = doc.data();
@@ -1433,7 +1441,15 @@ function listenForCallStatusChanges(callId) {
                 callTone.currentTime = 0;
                 
                 startCallTimer();
-            } else if (callData.status === 'ended' || callData.status === 'declined') {
+            } else if (callData.status === 'ended' || callData.status === 'declined' || callData.status === 'missed') {
+                if (callStatus !== 'idle') {
+                    showToast('Call ended', 'info');
+                    endCall();
+                }
+            }
+        } else {
+            if (callStatus !== 'idle') {
+                showToast('Call ended', 'info');
                 endCall();
             }
         }
@@ -1462,7 +1478,7 @@ function updateCallStatus(callId, status) {
 }
 
 // Setup WebRTC
-async function setupWebRTC() {
+async function setupWebRTC(isCaller) {
     try {
         localStream = await navigator.mediaDevices.getUserMedia({ audio: true });
         
@@ -1476,9 +1492,9 @@ async function setupWebRTC() {
             if (event.candidate && currentCallId) {
                 const callRef = db.collection('calls').doc(currentCallId);
                 
-                if (callStatus === 'calling') {
+                if (isCaller) {
                     callRef.collection('callerCandidates').add(event.candidate.toJSON());
-                } else if (callStatus === 'active') {
+                } else {
                     callRef.collection('recipientCandidates').add(event.candidate.toJSON());
                 }
             }
@@ -1493,17 +1509,15 @@ async function setupWebRTC() {
             const remoteAudio = new Audio();
             remoteAudio.srcObject = remoteStream;
             remoteAudio.autoplay = true;
-            
-            if (isSpeakerOn) {
-                remoteAudio.setSinkId('speaker').catch(e => console.log('Error setting audio output:', e));
-            }
+            remoteAudio.play().catch(e => console.log('Error playing remote audio:', e));
         };
         
-        if (callStatus === 'calling') {
+        const callRef = db.collection('calls').doc(currentCallId);
+        
+        if (isCaller) {
             const offer = await peerConnection.createOffer();
             await peerConnection.setLocalDescription(offer);
             
-            const callRef = db.collection('calls').doc(currentCallId);
             await callRef.update({
                 offer: {
                     type: offer.type,
@@ -1527,11 +1541,7 @@ async function setupWebRTC() {
                     }
                 });
             });
-        }
-        
-        if (callStatus === 'receiving') {
-            const callRef = db.collection('calls').doc(currentCallId);
-            
+        } else {
             callRef.onSnapshot(async (snapshot) => {
                 const data = snapshot.data();
                 if (!peerConnection.currentRemoteDescription && data && data.offer) {
@@ -1587,7 +1597,9 @@ function answerCall() {
     
     startCallTimer();
     
-    setupWebRTC();
+    setupWebRTC(false); // false for recipient
+    
+    listenForCallStatusChanges(currentCallId);
 }
 
 // Decline call
@@ -1616,7 +1628,12 @@ function endCall() {
         callTone.currentTime = 0;
     }
     
-    if (currentCallId && (callStatus === 'calling' || callStatus === 'active')) {
+    if (ringtone) {
+        ringtone.pause();
+        ringtone.currentTime = 0;
+    }
+    
+    if (currentCallId && (callStatus === 'calling' || callStatus === 'active' || callStatus === 'receiving')) {
         updateCallStatus(currentCallId, 'ended');
     }
     
@@ -1639,6 +1656,7 @@ function endCall() {
     currentCallId = null;
     
     document.getElementById('active-call-screen').style.display = 'none';
+    document.getElementById('incoming-call-screen').style.display = 'none';
     document.getElementById('call-screen').style.display = 'flex';
     
     loadCallHistory();
@@ -1679,6 +1697,7 @@ function toggleSpeaker() {
         speakerIcon.classList.add('fa-volume-up');
         showToast('Speaker on', 'success');
     }
+    // Note: setSinkId requires deviceId, not implemented here
 }
 
 // Start call timer
@@ -1701,6 +1720,7 @@ function stopCallTimer() {
 }
 
 // Load call history
+let callHistory = [];
 function loadCallHistory() {
     if (!currentUser) return;
     
@@ -1865,6 +1885,11 @@ function formatCallTime(time) {
 function startCallFromHistory(mobile) {
     document.getElementById('call-number').value = mobile;
     startCall();
+}
+
+// Filter calls
+function filterCalls(filter) {
+    displayCallHistory(filter);
 }
 
 // Show toast
